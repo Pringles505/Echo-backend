@@ -4,9 +4,7 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs'); 
-
 const jwt = require('jsonwebtoken');
-
 const shortid = require('shortid');
 
 require('dotenv').config(); 
@@ -14,7 +12,7 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-const io = require('socket.io')(server, {
+const io = socketIo(server, {
   cors: {
     origin: ['http://localhost:5173', 'https://chat-tuah-frontend.vercel.app'],
     methods: ['GET', 'POST'],
@@ -40,13 +38,16 @@ mongoose.connect(mongoUri).then(() => {
 
 // Database Schemas
 const userSchema = new mongoose.Schema({
-  id: {type: String, unique: true},
+  id: { type: String, unique: true },
   username: String,
   hashedPassword: String,
 });
 
 const messageSchema = new mongoose.Schema({
   text: String,
+  user1: String,
+  user2: String,
+  conversationId: String,
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -74,7 +75,6 @@ const authenticate = (socket, next) => {
 
 io.use(authenticate);
 
-
 io.on('connection', (socket) => {
   console.log('a user connected');
 
@@ -90,12 +90,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('register', (data, callback) => {
-    const {username, password} = data;
+    const { username, password } = data;
     console.log('Received register:', data);
-    // All upper case, number, and letter, 7 characters
-    // 36^7 = 78,364,164,096 combinations * more with special characters
     const id = shortid.generate().toUpperCase().slice(0, 7);
-    hashedPassword = bcrypt.hashSync(password, 10);
+    const hashedPassword = bcrypt.hashSync(password, 10); 
     const user = new User({ id, username, hashedPassword });
     user.save().then(() => {
       console.log('User saved:', user);
@@ -104,59 +102,101 @@ io.on('connection', (socket) => {
       console.error('Error saving user:', err);
       callback({ success: false });
     });
-
-  })
+  });
 
   socket.on('login', async (data, callback) => {
-  const { username, password } = data;
-  console.log('Login event received:', { username, password });
+    const { username, password } = data;
+    console.log('Login event received:', { username, password });
 
-  try {
-    // Query the database for the user
-    const user = await User.findOne({ username });
-    if (!user) {
-      console.log('User not found');
-      return callback({ success: false, error: 'Invalid username or password' });
+    try {
+      const user = await User.findOne({ username });
+      if (!user) {
+        console.log('User not found');
+        return callback({ success: false, error: 'Invalid username or password' });
+      }
+
+      console.log('Found user:', user);
+      const isMatch = await bcrypt.compare(password, user.hashedPassword);
+      if (!isMatch) {
+        console.log('Password mismatch');
+        return callback({ success: false, error: 'Invalid username or password' });
+      }
+      console.log('Password match');
+
+      const token = jwt.sign(
+        { id: user.id, username: user.username },
+        process.env.JWT_SECRET, 
+        { expiresIn: '1h' }
+      );
+      console.log('Generated Token:', token); 
+
+      callback({ success: true, token });
+    } catch (err) {
+      console.error('Error during login:', err);
+      callback({ success: false, error: 'Login failed' });
     }
+  });
 
-    console.log('Found user:', user);
-    // Compare passwords
-    console.log('before check password', password, user.hashedPassword);
-    const isMatch = await bcrypt.compare(password, user.hashedPassword);
-    if (!isMatch) {
-      console.log('Password mismatch');
-      console.log('Password:', password, 'Hashed Password:', user.password);
-      return callback({ success: false, error: 'Invalid username or password' });
-    }
-    console.log('Password match');
-
-    // Generate a JWT
-    const token = jwt.sign(
-      { id: user.id, username: user.username },
-      process.env.JWT_SECRET, 
-      { expiresIn: '1h' }
-    );
-    console.log('Generated Token:', token); 
-
-    callback({ success: true, token });
-  } catch (err) {
-    console.error('Error during login:', err);
-    callback({ success: false, error: 'Login failed' });
-  }
-});
-
-
-  socket.on('chat message', (msg) => {
-    console.log('Received chat message:', msg);
-    const message = new Message({ text: msg });
+  socket.on('chat message', (data) => {
+    console.log('Received Data:', data);
+    const { text, userId } = data;
+    console.log('Received message:', text);
+    console.log('User ID:', userId);
+    const message = new Message({ text, user: userId });
     message.save().then(() => {
-      console.log('Message saved:', message); 
       io.emit('chat message', message);
     }).catch((err) => {
       console.error('Error saving message:', err);
     });
   });
+
+  socket.on('startChat', async (data, callback) => {
+    console.log('Data:', data);
+    const { userId, targetUserId } = data;
+    console.log('Start chat:', userId, targetUserId);
   
+    const sortedIds = [userId, targetUserId].sort();
+    const conversationId = `${sortedIds[0]}${sortedIds[1]}`;
+    const text = "INITIATE CONVERSATION"; 
+    const message = new Message({ text, user1: userId, user2: targetUserId, conversationId });
+  
+    try {
+      await message.save();
+      console.log('Message saved:', message);
+      io.emit('chat message', message);
+  
+      // Check if callback is a function before calling it
+      if (typeof callback === 'function') {
+        callback({ success: true, message });
+      } else {
+        console.error('Callback is not a function');
+      }
+    } catch (err) {
+      console.error('Error saving message:', err);
+      if (typeof callback === 'function') {
+        callback({ success: false, error: 'Failed to start chat' });
+      }
+    }
+  });
+
+  socket.on('searchUser', async (data, callback) => {
+    const username = data.searchTerm;
+    console.log("Data:", data);
+    console.log('Search user:', username);
+
+    try {
+      const user = await User.findOne({ username });
+      if (!user) {
+        console.log('User not found');
+        return callback({ success: false, error: 'User not found' });
+      }
+      console.log('Found user:', user);
+      callback({ success: true, user: { id: user.id, username: user.username } });
+    } catch (error) {
+      console.error('Error searching for user:', error);
+      callback({ success: false, error: 'Internal server error' });
+    }
+  });
 });
 
 server.listen(3001, () => {
