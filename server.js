@@ -3,7 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { customAlphabet } = require('nanoid');
 require('dotenv').config();
@@ -79,11 +79,11 @@ io.on('connection', (socket) => {
     try {
         const messages = await Message.find({
             $or: [
-                { userId, targetUserId },
-                { userId: targetUserId, targetUserId: userId },
+                  { userId, targetUserId },
+                  { userId: targetUserId, targetUserId: userId },
             ],
         }).sort({ createdAt: 1 }); 
-        
+
         console.log(`Sending ${messages.length} messages to User ${userId} ↔ ${targetUserId}`);
         socket.emit('init', messages);
     } catch (err) {
