@@ -42,8 +42,9 @@ const userSchema = new mongoose.Schema({
 
 const messageSchema = new mongoose.Schema({
   text: String,
-  userId: String, // Add userId field
-  targetUserId: String, // Add targetUserId field
+  userId: String,
+  targetUserId: String, 
+  username: String,
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -73,8 +74,27 @@ io.use(authenticate);
 io.on('connection', (socket) => {
   console.log('a user connected');
 
+  socket.on('fetchUsername', async (userId, callback) => {
+    console.log('Fetching username for user:', userId);
+    try {
+      const user = await User.findOne({ id: userId });
+      if (user) {
+        callback({ success: true, username: user.username });
+      } else {
+        callback({ success: false, error: 'User not found' });
+      }
+    } catch (error) {
+      console.error('Error fetching username:', error);
+      callback({ success: false, error: 'Internal server error' });
+    }
+  });
+
   socket.on('ready', async ({ userId, targetUserId }) => {
     console.log(`User ${userId} is opening chat with ${targetUserId}`);
+    
+    // Create a private room between userId and targetUserId
+    const room = [userId, targetUserId].sort().join('_');
+    socket.join(room);
 
     try {
         const messages = await Message.find({
@@ -85,7 +105,9 @@ io.on('connection', (socket) => {
         }).sort({ createdAt: 1 }); 
 
         console.log(`Sending ${messages.length} messages to User ${userId} ↔ ${targetUserId}`);
-        socket.emit('init', messages);
+
+        // Message is emitted to users in room and no one else
+        io.to(room).emit('init', messages);
     } catch (err) {
         console.error('Error fetching messages:', err);
     }
@@ -149,17 +171,17 @@ io.on('connection', (socket) => {
   socket.on('chat message', async (data) => {
     console.log('Received Data:', data);
 
-    const { text, userId, targetUserId } = data;
+    const { text, userId, targetUserId, username } = data;
 
-    if (!text || !userId || !targetUserId) {
-      console.error('Missing fields in message data:', { text, userId, targetUserId });
+    if (!text || !userId || !targetUserId || !username) {
+      console.error('Missing fields in message data:', { text, userId, targetUserId, username });
       return;
     }
 
-    console.log('Saving message:', { text, userId, targetUserId });
+    console.log('Saving message:', { text, userId, targetUserId, username });
 
     try {
-      const message = new Message({ text, userId, targetUserId });
+      const message = new Message({ text, userId, targetUserId, username });
       await message.save();
       console.log('Message successfully saved:', message);
       socket.broadcast.emit('chat message', message);
