@@ -122,12 +122,12 @@ io.on('connection', (socket) => {
   socket.on('register', async (data, callback) => {
     const { username, password } = data;
     console.log('Received register:', data);
-
+  
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
       const id = nanoid();
-      const user = new User({ id, username, password: hashedPassword });
+      const user = new User({ id, username, hashedPassword }); 
       await user.save();
       console.log('User saved:', user);
       callback({ success: true });
