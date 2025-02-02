@@ -8,6 +8,8 @@ const jwt = require('jsonwebtoken');
 const { customAlphabet } = require('nanoid');
 require('dotenv').config();
 
+const userSocketMap = {};
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -53,6 +55,7 @@ const User = mongoose.model('User', userSchema);
 
 const authenticate = (socket, next) => {
   const token = socket.handshake.auth.token;
+  console.log("Received Token:", token);
 
   if (!token) {
     console.warn('No token provided, allowing unauthenticated access for login/register');
@@ -60,6 +63,12 @@ const authenticate = (socket, next) => {
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+
+    if (!err && decoded) {
+      userSocketMap[decoded.id] = socket.id;
+      console.log(`User ${decoded.username} is mapped to socket ${socket.id}`);
+    }
+
     if (err) {
       console.error('Invalid token:', err);
       return next(new Error('Authentication error'));
@@ -72,7 +81,19 @@ const authenticate = (socket, next) => {
 io.use(authenticate);
 
 io.on('connection', (socket) => {
-  console.log('a user connected');
+  console.log(`A user connected with socket ID: ${socket.id}`);
+
+  const token = socket.handshake.auth.token;
+  
+  if (token) {
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+      if (!err && decoded) {
+        userSocketMap[decoded.id] = socket.id;
+        console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
+        console.log('Current userSocketMap:', userSocketMap);
+      }
+    });
+  }
 
   socket.on('fetchUsername', async (userId, callback) => {
     console.log('Fetching username for user:', userId);
@@ -113,10 +134,15 @@ io.on('connection', (socket) => {
     }
 });
 
-
-
   socket.on('disconnect', () => {
-    console.log('user disconnected');
+    console.log(`User with socket ID ${socket.id} disconnected.`);
+
+    for (const userId in userSocketMap) {
+      if (userSocketMap[userId] === socket.id) {
+        delete userSocketMap[userId];
+        break;
+      }
+    }
   });
 
   socket.on('register', async (data, callback) => {
@@ -184,12 +210,29 @@ io.on('connection', (socket) => {
       const message = new Message({ text, userId, targetUserId, username });
       await message.save();
       console.log('Message successfully saved:', message);
+
       socket.broadcast.emit('chat message', message);
 
-    } catch (err) {
-      console.error('Error saving message:', err);
+      // Emit the message to the target user
+      const targetSocketId = userSocketMap[targetUserId];
+
+      if (targetSocketId) {
+      console.log(`Sending message notification to User ${targetUserId} at Socket ${targetSocketId}`);
+
+      // Send notification directly to the user
+      io.to(targetSocketId).emit('notification', {
+        messageData: message,
+      });
+
+      // Also send the actual message event
+      io.to(targetSocketId).emit('chat message', message);
+    } else {
+      console.warn(`User ${targetUserId} is not connected, message stored but no real-time notification sent.`);
     }
-  });
+  } catch (err) {
+    console.error('Error saving message:', err);
+  }
+});
 
   socket.on('searchUser', async (data, callback) => {
     const username = data.searchTerm;
