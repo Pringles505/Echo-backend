@@ -47,6 +47,7 @@ const messageSchema = new mongoose.Schema({
   userId: String,
   targetUserId: String, 
   username: String,
+  seenStatus: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -59,6 +60,7 @@ const authenticate = (socket, next) => {
 
   if (!token) {
     console.warn('No token provided, allowing unauthenticated access for login/register');
+
     return next();
   }
 
@@ -163,6 +165,27 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('messageSeen', async (data) => {
+    const { userId, targetUserId } = data;
+    console.log("Message from ", userId, " seen by ", targetUserId);
+  
+    try {
+      // Log the query and update
+      console.log('Updating messages with query:', { userId, targetUserId, seenStatus: false });
+      console.log('Update operation:', { $set: { seenStatus: true } });
+  
+      const result = await Message.updateMany(
+        { userId: targetUserId, targetUserId: userId, seenStatus: false },
+        { $set: { seenStatus: true } }
+      );
+  
+      console.log('Updated messages seenStatus:', result);
+
+    } catch (err) {
+      console.error('Error updating seenStatus:', err);
+    }
+  });
+
   socket.on('login', async (data, callback) => {
     const { username, password } = data;
     console.log('Received login:', data);
@@ -207,7 +230,7 @@ io.on('connection', (socket) => {
     console.log('Saving message:', { text, userId, targetUserId, username });
 
     try {
-      const message = new Message({ text, userId, targetUserId, username });
+      const message = new Message({ text, userId, targetUserId, username, seenStatus: false });
       await message.save();
       console.log('Message successfully saved:', message);
 
