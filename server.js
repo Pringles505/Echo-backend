@@ -137,7 +137,7 @@ io.on('connection', (socket) => {
 });
 
   socket.on('disconnect', () => {
-    console.log(`User with socket ID ${socket.id} disconnected.`);
+    console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
 
     for (const userId in userSocketMap) {
       if (userSocketMap[userId] === socket.id) {
@@ -180,6 +180,12 @@ io.on('connection', (socket) => {
       );
   
       console.log('Updated messages seenStatus:', result);
+
+      const senderSocketId = userSocketMap[targetUserId];
+      if (senderSocketId) {
+        io.to(senderSocketId).emit('messageSeenUpdate', { userId, targetUserId });
+        console.log(`Notified sender ${targetUserId} with socket id ${senderSocketId} about seen status update`);
+      }
 
     } catch (err) {
       console.error('Error updating seenStatus:', err);
