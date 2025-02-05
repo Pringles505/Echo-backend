@@ -249,7 +249,7 @@ io.on('connection', (socket) => {
       console.log(`Sending message notification to User ${targetUserId} at Socket ${targetSocketId}`);
 
       // Send notification directly to the user
-      io.to(targetSocketId).emit('notification', {
+      io.to(targetSocketId, userId).emit('notification', {
         messageData: message,
       });
 
