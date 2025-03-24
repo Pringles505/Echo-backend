@@ -40,6 +40,7 @@ const userSchema = new mongoose.Schema({
   username: String,
   hashedPassword: String,
   friends: [String],
+  publicIdentityKey: String,
 });
 
 const messageSchema = new mongoose.Schema({
@@ -148,14 +149,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('register', async (data, callback) => {
-    const { username, password } = data;
+    const { username, password, publicKeyString } = data;
     console.log('Received register:', data);
   
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
       const id = nanoid();
-      const user = new User({ id, username, hashedPassword }); 
+      const user = new User({ id, username, hashedPassword, publicIdentityKey: publicKeyString }); 
       await user.save();
       console.log('User saved:', user);
       callback({ success: true });
@@ -220,6 +221,24 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error during login:', err);
       callback({ success: false, error: 'Login failed' });
+    }
+  });
+  
+  socket.on('getPublicIdentityKey', async ({ targetUserId }, callback) => {
+    try {
+      console.log(`🔍 Fetching publicIdentityKey for user: ${targetUserId}`);
+      const user = await User.findOne({ id: targetUserId });
+  
+      if (!user) {
+        console.error('❌ User not found');
+        return callback({ success: false, error: 'User not found' });
+      }
+  
+      console.log('✅ Found publicIdentityKey:', user.publicIdentityKey);
+      callback({ success: true, publicIdentityKey: user.publicIdentityKey });
+    } catch (error) {
+      console.error('❌ Error fetching publicIdentityKey:', error);
+      callback({ success: false, error: 'Internal server error' });
     }
   });
 
