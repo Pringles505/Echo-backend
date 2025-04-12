@@ -40,7 +40,10 @@ const userSchema = new mongoose.Schema({
   username: String,
   hashedPassword: String,
   friends: [String],
-  publicIdentityKey: String,
+  publicIdentityKeyX25519: String,
+  publicIdentityKeyEd25519: String,
+  signedPreKey: String,
+  signature: String,
 });
 
 const messageSchema = new mongoose.Schema({
@@ -131,13 +134,68 @@ io.on('connection', (socket) => {
         console.log(`Sending ${messages.length} messages to User ${userId} ↔ ${targetUserId}`);
 
         // Message is emitted to users in room and no one else
-        io.to(room).emit('init', messages);
+        io.to(room).emit('initChat', messages);
     } catch (err) {
         console.error('Error fetching messages:', err);
     }
 });
 
-  socket.on('disconnect', () => {
+// Get the SignedPreKey Array (PreyKey + Signature) for XEdDSA 
+socket.on('getSignedPreKey', async ({ targetUserId }, callback) => {
+  console.log(`🔍 Fetching SignedPreKey for user: ${targetUserId}`);
+  try {
+    const user = await User.findOne({ id: targetUserId });
+    if (!user) {
+      console.error('❌ User not found');
+      return callback({ success: false, error: 'User not found' });
+    }
+    console.log('✅ Found PreKey:', user.signedPreKey);
+    console.log('✅ Found Signature:', user.signature);
+    
+    // Return the SignedPreKey as an array [publicPreKey, signature]
+    callback({ success: true, signedPreKey: user.signedPreKey, signature: user.signature });
+  } catch (error) {
+    console.error('❌ Error fetching SignedPreKey:', error);
+    callback({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get publicIdentityKey in Montgomery format
+socket.on('getPublicIdentityKeyX25519', async ({ targetUserId }, callback) => {
+  console.log(`🔍 Fetching PublicIdentityKeyX25519 for user: ${targetUserId}`);
+  try {
+    const user = await User.findOne({ id: targetUserId });
+    if (!user) {
+      console.error('❌ User not found');
+      return callback({ success: false, error: 'User not found' });
+    }
+    console.log('✅ Found publicIdentityKeyX25519:', user.publicIdentityKeyX25519);
+    callback({ success: true, publicIdentityKeyX25519: user.publicIdentityKeyX25519 });
+  } catch (error) {
+    console.error('❌ Error fetching publicIdentityKeyX25519:', error);
+    callback({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get publicIdentityKey in Edwards format
+socket.on('getPublicIdentityKeyEd25519', async ({ targetUserId }, callback) => {
+  console.log(`🔍 Fetching publicIdentityKeyEd25519 for user: ${targetUserId}`);
+  try {
+    const user = await User.findOne({ id: targetUserId });
+    if (!user) {
+      console.error('❌ User not found');
+      return callback({ success: false, error: 'User not found' });
+    }
+    console.log('✅ Found publicIdentityKeyEd25519:', user.publicIdentityKeyEd25519);
+    callback({ success: true, publicIdentityKeyEd25519: user.publicIdentityKeyEd25519 });
+  } catch (error) {
+    console.error('❌ Error fetching publicIdentityKeyEd25519:', error);
+    callback({ success: false, error: 'Internal server error' });
+  }
+});
+
+
+socket.on('disconnect', () => {
     console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
 
     for (const userId in userSocketMap) {
@@ -149,14 +207,24 @@ io.on('connection', (socket) => {
   });
 
   socket.on('register', async (data, callback) => {
-    const { username, password, publicKeyString } = data;
+    const { username, password, keyBundle } = data;
+    const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey } = keyBundle;
+    const [signedPreKey, signature] = publicSignedPreKey;
+
     console.log('Received register:', data);
+    console.log('Public Identity Key X25519:', publicIdentityKeyX25519);
+    console.log('Public Identity Key Ed25519:', publicIdentityKeyEd25519);
   
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
       const id = nanoid();
-      const user = new User({ id, username, hashedPassword, publicIdentityKey: publicKeyString }); 
+      const user = new User({ id, username, hashedPassword, 
+        publicIdentityKeyX25519: publicIdentityKeyX25519, 
+        publicIdentityKeyEd25519: publicIdentityKeyEd25519,
+        signedPreKey: signedPreKey,
+        signature: signature,});
+
       await user.save();
       console.log('User saved:', user);
       callback({ success: true });
@@ -224,25 +292,9 @@ io.on('connection', (socket) => {
     }
   });
   
-  socket.on('getPublicIdentityKey', async ({ targetUserId }, callback) => {
-    try {
-      console.log(`🔍 Fetching publicIdentityKey for user: ${targetUserId}`);
-      const user = await User.findOne({ id: targetUserId });
-  
-      if (!user) {
-        console.error('❌ User not found');
-        return callback({ success: false, error: 'User not found' });
-      }
-  
-      console.log('✅ Found publicIdentityKey:', user.publicIdentityKey);
-      callback({ success: true, publicIdentityKey: user.publicIdentityKey });
-    } catch (error) {
-      console.error('❌ Error fetching publicIdentityKey:', error);
-      callback({ success: false, error: 'Internal server error' });
-    }
-  });
 
-  socket.on('chat message', async (data) => {
+
+  socket.on('newMessage', async (data) => {
     console.log('Received Data:', data);
 
     const { text, userId, targetUserId, username } = data;
@@ -259,7 +311,7 @@ io.on('connection', (socket) => {
       await message.save();
       console.log('Message successfully saved:', message);
 
-      socket.broadcast.emit('chat message', message);
+      socket.broadcast.emit('newMessage', message);
 
       // Emit the message to the target user
       const targetSocketId = userSocketMap[targetUserId];
@@ -273,7 +325,7 @@ io.on('connection', (socket) => {
       });
 
       // Also send the actual message event
-      io.to(targetSocketId).emit('chat message', message);
+      io.to(targetSocketId).emit('newMessage', message);
     } else {
       console.warn(`User ${targetUserId} is not connected, message stored but no real-time notification sent.`);
     }
