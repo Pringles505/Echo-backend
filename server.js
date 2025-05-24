@@ -47,10 +47,13 @@ const userSchema = new mongoose.Schema({
 });
 
 const messageSchema = new mongoose.Schema({
+  is_initial: Boolean,
   text: String,
   userId: String,
   targetUserId: String, 
   username: String,
+  messageNumber: Number,
+  publicEphemeralKey: String, 
   seenStatus: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
@@ -124,17 +127,17 @@ io.on('connection', (socket) => {
     socket.join(room);
 
     try {
-        const messages = await Message.find({
+        const message = await Message.find({
             $or: [
                   { userId, targetUserId },
                   { userId: targetUserId, targetUserId: userId },
             ],
         }).sort({ createdAt: 1 }); 
 
-        console.log(`Sending ${messages.length} messages to User ${userId} ↔ ${targetUserId}`);
+        console.log(`Sending ${message.length} messages to User ${userId} ↔ ${targetUserId}`);
 
         // Message is emitted to users in room and no one else
-        io.to(room).emit('initChat', messages);
+        io.to(room).emit('newMessage', message);
     } catch (err) {
         console.error('Error fetching messages:', err);
     }
@@ -291,23 +294,68 @@ socket.on('disconnect', () => {
       callback({ success: false, error: 'Login failed' });
     }
   });
-  
 
+  socket.on('checkIfMessagesExist', async (data, callback) => {
+    const { userId, targetUserId } = data;
+    console.log('Checking if messages exist for:', { userId, targetUserId });
+
+    try {
+        const message_1 = await Message.findOne({ userId, targetUserId });
+        const message_2 = await Message.findOne({ userId: targetUserId, targetUserId: userId });
+        if (message_1 || message_2) {
+            console.log('Messages exist for this user pair');
+            callback({ success: true });
+        } else {
+            console.log('No messages found for this user pair');
+            callback({ success: false });
+        }
+    } catch (err) {
+        console.error('Error checking messages:', err);
+        callback({ success: false, error: 'Internal server error' });
+    }
+});
+
+  socket.on('getLatestMessageNumber', async (data, callback) => {
+    const { userId, targetUserId } = data;
+    
+    try {
+        // Search for messages in either direction
+        const latestMessage = await Message.findOne({
+            $or: [
+                { userId, targetUserId },
+                { userId: targetUserId, targetUserId: userId }
+            ]
+        }).sort({ messageNumber: -1 });
+        
+        // Return the found message number or 0 if none exist
+        callback({ 
+            success: true,
+            messageNumber: latestMessage?.messageNumber ?? 0
+        });
+    } catch (err) {
+        console.error('Error:', err);
+        callback({ 
+            success: false,
+            messageNumber: 0  // Fallback value
+        });
+    }
+});
+  
 
   socket.on('newMessage', async (data) => {
     console.log('Received Data:', data);
 
-    const { text, userId, targetUserId, username } = data;
+    const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
 
     if (!text || !userId || !targetUserId || !username) {
-      console.error('Missing fields in message data:', { text, userId, targetUserId, username });
+      console.error('Missing fields in message data:', { text, userId, targetUserId, username,messageNumber, is_initial });
       return;
     }
 
-    console.log('Saving message:', { text, userId, targetUserId, username });
+    console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
 
     try {
-      const message = new Message({ text, userId, targetUserId, username, seenStatus: false });
+      const message = new Message({ is_initial, text, userId, targetUserId, username, seenStatus: false, messageNumber, publicEphemeralKey });
       await message.save();
       console.log('Message successfully saved:', message);
 
@@ -353,6 +401,8 @@ socket.on('disconnect', () => {
     }
   });
 });
+
+
 
 server.listen(3001, () => {
   console.log('listening on *:3001');
