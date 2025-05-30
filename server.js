@@ -343,44 +343,49 @@ socket.on('disconnect', () => {
   
 
   socket.on('newMessage', async (data) => {
-    console.log('Received Data:', data);
+  const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
 
-    const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
+  if (!text || !userId || !targetUserId || !username) {
+    console.error('Missing fields in message data:', { text, userId, targetUserId, username, messageNumber, is_initial });
+    return;
+  }
 
-    if (!text || !userId || !targetUserId || !username) {
-      console.error('Missing fields in message data:', { text, userId, targetUserId, username,messageNumber, is_initial });
-      return;
-    }
+  console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
 
-    console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
+  try {
+    const message = new Message({
+      is_initial,
+      text,
+      userId,
+      targetUserId,
+      username,
+      seenStatus: false,
+      messageNumber,
+      publicEphemeralKey,
+    });
 
-    try {
-      const message = new Message({ is_initial, text, userId, targetUserId, username, seenStatus: false, messageNumber, publicEphemeralKey });
-      await message.save();
-      console.log('Message successfully saved:', message);
+    await message.save();
+    console.log('Message successfully saved:', message);
 
-      socket.broadcast.emit('newMessage', message);
+    // Create consistent room name
+    const room = [userId, targetUserId].sort().join('_');
 
-      // Emit the message to the target user
-      const targetSocketId = userSocketMap[targetUserId];
+    // Emit only to that room (both users)
+    io.to(room).emit('newMessage', message);
 
-      if (targetSocketId) {
-      console.log(`Sending message notification to User ${targetUserId} at Socket ${targetSocketId}`);
-
-      // Send notification directly to the user
-      io.to(targetSocketId, userId).emit('notification', {
+    // Optionally, emit a separate 'notification' event to the other user
+    const targetSocketId = userSocketMap[targetUserId];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('notification', {
         messageData: message,
       });
-
-      // Also send the actual message event
-      io.to(targetSocketId).emit('newMessage', message);
-    } else {
-      console.warn(`User ${targetUserId} is not connected, message stored but no real-time notification sent.`);
     }
+
   } catch (err) {
     console.error('Error saving message:', err);
   }
 });
+
 
   socket.on('searchUser', async (data, callback) => {
     const username = data.searchTerm;
