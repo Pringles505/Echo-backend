@@ -44,6 +44,8 @@ const userSchema = new mongoose.Schema({
   publicIdentityKeyEd25519: String,
   signedPreKey: String,
   signature: String,
+  aboutme: { type: String, default: '' },
+  profilePicture: { type: String, default: '' },
 });
 
 const messageSchema = new mongoose.Schema({
@@ -210,32 +212,39 @@ socket.on('disconnect', () => {
   });
 
   socket.on('register', async (data, callback) => {
-    const { username, password, keyBundle } = data;
-    const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey } = keyBundle;
-    const [signedPreKey, signature] = publicSignedPreKey;
+  const { username, password, keyBundle, aboutme, profilePicture } = data;
+  const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey } = keyBundle;
+  const [signedPreKey, signature] = publicSignedPreKey;
 
-    console.log('Received register:', data);
-    console.log('Public Identity Key X25519:', publicIdentityKeyX25519);
-    console.log('Public Identity Key Ed25519:', publicIdentityKeyEd25519);
-  
-    try {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
-      const id = nanoid();
-      const user = new User({ id, username, hashedPassword, 
-        publicIdentityKeyX25519: publicIdentityKeyX25519, 
-        publicIdentityKeyEd25519: publicIdentityKeyEd25519,
-        signedPreKey: signedPreKey,
-        signature: signature,});
+  console.log('Received register:', data);
+  console.log('Public Identity Key X25519:', publicIdentityKeyX25519);
+  console.log('Public Identity Key Ed25519:', publicIdentityKeyEd25519);
 
-      await user.save();
-      console.log('User saved:', user);
-      callback({ success: true });
-    } catch (err) {
-      console.error('Error saving user:', err);
-      callback({ success: false });
-    }
-  });
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
+    const id = nanoid();
+    const user = new User({
+      id,
+      username,
+      hashedPassword,
+      publicIdentityKeyX25519,
+      publicIdentityKeyEd25519,
+      signedPreKey,
+      signature,
+      aboutme: typeof aboutme === 'string' ? aboutme : '',
+      profilePicture: typeof profilePicture === 'string' ? profilePicture : '',
+    });
+
+    console.log("about me and profile picture:", user.aboutme, user.profilePicture);
+    await user.save();
+    console.log('User saved:', user);
+    callback({ success: true });
+  } catch (err) {
+    console.error('Error saving user:', err);
+    callback({ success: false });
+  }
+});
 
   socket.on('messageSeen', async (data) => {
     const { userId, targetUserId } = data;
@@ -400,15 +409,9 @@ socket.on('disconnect', () => {
       }
       console.log('Found user:', user);
       callback({ success: true, user: { id: user.id, username: user.username } });
-    } catch (error) {
-      console.error('Error searching for user:', error);
+    } catch {
+      console.error('Error searching for user');
       callback({ success: false, error: 'Internal server error' });
     }
-  });
-});
-
-
-
-server.listen(3001, () => {
-  console.log('listening on *:3001');
+  })
 });
