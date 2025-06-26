@@ -30,14 +30,14 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: ['http://localhost:5173', 'https://chat-tuah-frontend.vercel.app'],
-    methods: ['GET', 'POST', 'PUT'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
   },
 });
 
 app.use(cors({
   origin: ['http://localhost:5173', 'https://chat-tuah-frontend.vercel.app'],
-  methods: ['GET', 'POST', 'PUT'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type'],
   credentials: true,
 }));
@@ -69,10 +69,10 @@ const messageSchema = new mongoose.Schema({
   is_initial: Boolean,
   text: String,
   userId: String,
-  targetUserId: String, 
+  targetUserId: String,
   username: String,
   messageNumber: Number,
-  publicEphemeralKey: String, 
+  publicEphemeralKey: String,
   seenStatus: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
@@ -109,7 +109,7 @@ io.on('connection', (socket) => {
   console.log(`A user connected with socket ID: ${socket.id}`);
 
   const token = socket.handshake.auth.token;
-  
+
   if (token) {
     jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
       if (!err && decoded) {
@@ -137,25 +137,25 @@ io.on('connection', (socket) => {
 
   socket.on('ready', async ({ userId, targetUserId }) => {
     console.log(`User ${userId} is opening chat with ${targetUserId}`);
-    
+
     // Create a private room between userId and targetUserId
     const room = [userId, targetUserId].sort().join('_');
     socket.join(room);
 
     try {
-        const message = await Message.find({
-            $or: [
-                  { userId, targetUserId },
-                  { userId: targetUserId, targetUserId: userId },
-            ],
-        }).sort({ createdAt: 1 }); 
+      const message = await Message.find({
+        $or: [
+          { userId, targetUserId },
+          { userId: targetUserId, targetUserId: userId },
+        ],
+      }).sort({ createdAt: 1 });
 
-        console.log(`Sending ${message.length} messages to User ${userId} ↔ ${targetUserId}`);
+      console.log(`Sending ${message.length} messages to User ${userId} ↔ ${targetUserId}`);
 
-        // Message is emitted to users in room and no one else
-        io.to(room).emit('newMessage', message);
+      // Message is emitted to users in room and no one else
+      io.to(room).emit('newMessage', message);
     } catch (err) {
-        console.error('Error fetching messages:', err);
+      console.error('Error fetching messages:', err);
     }
   });
 
@@ -170,7 +170,7 @@ io.on('connection', (socket) => {
       }
       console.log('✅ Found PreKey:', user.signedPreKey);
       console.log('✅ Found Signature:', user.signature);
-      
+
       // Return the SignedPreKey as an array [publicPreKey, signature]
       callback({ success: true, signedPreKey: user.signedPreKey, signature: user.signature });
     } catch (error) {
@@ -232,7 +232,7 @@ io.on('connection', (socket) => {
     console.log('Received register:', data);
     console.log('Public Identity Key X25519:', publicIdentityKeyX25519);
     console.log('Public Identity Key Ed25519:', publicIdentityKeyEd25519);
-  
+
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
@@ -266,17 +266,17 @@ io.on('connection', (socket) => {
   socket.on('messageSeen', async (data) => {
     const { userId, targetUserId } = data;
     console.log("Message from ", userId, " seen by ", targetUserId);
-  
+
     try {
       // Log the query and update
       console.log('Updating messages with query:', { userId, targetUserId, seenStatus: false });
       console.log('Update operation:', { $set: { seenStatus: true } });
-  
+
       const result = await Message.updateMany(
         { userId: targetUserId, targetUserId: userId, seenStatus: false },
         { $set: { seenStatus: true } }
       );
-  
+
       console.log('Updated messages seenStatus:', result);
 
       const senderSocketId = userSocketMap[targetUserId];
@@ -326,91 +326,91 @@ io.on('connection', (socket) => {
     console.log('Checking if messages exist for:', { userId, targetUserId });
 
     try {
-        const message_1 = await Message.findOne({ userId, targetUserId });
-        const message_2 = await Message.findOne({ userId: targetUserId, targetUserId: userId });
-        if (message_1 || message_2) {
-            console.log('Messages exist for this user pair');
-            callback({ success: true });
-        } else {
-            console.log('No messages found for this user pair');
-            callback({ success: false });
-        }
+      const message_1 = await Message.findOne({ userId, targetUserId });
+      const message_2 = await Message.findOne({ userId: targetUserId, targetUserId: userId });
+      if (message_1 || message_2) {
+        console.log('Messages exist for this user pair');
+        callback({ success: true });
+      } else {
+        console.log('No messages found for this user pair');
+        callback({ success: false });
+      }
     } catch (err) {
-        console.error('Error checking messages:', err);
-        callback({ success: false, error: 'Internal server error' });
+      console.error('Error checking messages:', err);
+      callback({ success: false, error: 'Internal server error' });
     }
   });
 
   socket.on('getLatestMessageNumber', async (data, callback) => {
     const { userId, targetUserId } = data;
-    
+
     try {
-        // Search for messages in either direction
-        const latestMessage = await Message.findOne({
-            $or: [
-                { userId, targetUserId },
-                { userId: targetUserId, targetUserId: userId }
-            ]
-        }).sort({ messageNumber: -1 });
-        
-        // Return the found message number or 0 if none exist
-        callback({ 
-            success: true,
-            messageNumber: latestMessage?.messageNumber ?? 0
-        });
+      // Search for messages in either direction
+      const latestMessage = await Message.findOne({
+        $or: [
+          { userId, targetUserId },
+          { userId: targetUserId, targetUserId: userId }
+        ]
+      }).sort({ messageNumber: -1 });
+
+      // Return the found message number or 0 if none exist
+      callback({
+        success: true,
+        messageNumber: latestMessage?.messageNumber ?? 0
+      });
     } catch (err) {
-        console.error('Error:', err);
-        callback({ 
-            success: false,
-            messageNumber: 0  // Fallback value
-        });
-    }
-});
-  
-
-  socket.on('newMessage', async (data) => {
-  const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
-
-  if (!text || !userId || !targetUserId || !username) {
-    console.error('Missing fields in message data:', { text, userId, targetUserId, username, messageNumber, is_initial });
-    return;
-  }
-
-  console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
-
-  try {
-    const message = new Message({
-      is_initial,
-      text,
-      userId,
-      targetUserId,
-      username,
-      seenStatus: false,
-      messageNumber,
-      publicEphemeralKey,
-    });
-
-    await message.save();
-    console.log('Message successfully saved:', message);
-
-    // Create consistent room name
-    const room = [userId, targetUserId].sort().join('_');
-
-    // Emit only to that room (both users)
-    io.to(room).emit('newMessage', message);
-
-    // Optionally, emit a separate 'notification' event to the other user
-    const targetSocketId = userSocketMap[targetUserId];
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('notification', {
-        messageData: message,
+      console.error('Error:', err);
+      callback({
+        success: false,
+        messageNumber: 0  // Fallback value
       });
     }
+  });
 
-  } catch (err) {
-    console.error('Error saving message:', err);
-  }
-});
+
+  socket.on('newMessage', async (data) => {
+    const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
+
+    if (!text || !userId || !targetUserId || !username) {
+      console.error('Missing fields in message data:', { text, userId, targetUserId, username, messageNumber, is_initial });
+      return;
+    }
+
+    console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
+
+    try {
+      const message = new Message({
+        is_initial,
+        text,
+        userId,
+        targetUserId,
+        username,
+        seenStatus: false,
+        messageNumber,
+        publicEphemeralKey,
+      });
+
+      await message.save();
+      console.log('Message successfully saved:', message);
+
+      // Create consistent room name
+      const room = [userId, targetUserId].sort().join('_');
+
+      // Emit only to that room (both users)
+      io.to(room).emit('newMessage', message);
+
+      // Optionally, emit a separate 'notification' event to the other user
+      const targetSocketId = userSocketMap[targetUserId];
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('notification', {
+          messageData: message,
+        });
+      }
+
+    } catch (err) {
+      console.error('Error saving message:', err);
+    }
+  });
 
 
   socket.on('searchUser', async (data, callback) => {
@@ -437,59 +437,59 @@ io.on('connection', (socket) => {
     console.log('Received data:', JSON.stringify(data, null, 2));
     const { userId, username, aboutme, profilePicture, oldPassword, newPassword } = data;
     try {
-        const user = await User.findOne({ id: userId });
-        if (!user) {
-            return callback && callback({ success: false, error: 'User not found' });
-        }
+      const user = await User.findOne({ id: userId });
+      if (!user) {
+        return callback && callback({ success: false, error: 'User not found' });
+      }
 
-        if (typeof username === 'string' && username.length > 0) {
-            user.username = username;
-        }
+      if (typeof username === 'string' && username.length > 0) {
+        user.username = username;
+      }
 
-        if (typeof aboutme === 'string') {
-            user.aboutme = aboutme;
-        }
+      if (typeof aboutme === 'string') {
+        user.aboutme = aboutme;
+      }
 
-        if (typeof profilePicture === 'string' && profilePicture.startsWith('data:image/')) {
-            const url = await saveProfilePicture(profilePicture, userId);
-            user.profilePicture = url;
-        }
+      if (typeof profilePicture === 'string' && profilePicture.startsWith('data:image/')) {
+        const url = await saveProfilePicture(profilePicture, userId);
+        user.profilePicture = url;
+      }
 
-        if (oldPassword && newPassword) {
-            const isMatch = await bcrypt.compare(oldPassword, user.hashedPassword);
-            if (!isMatch) {
-                return callback && callback({ success: false, error: 'Old password is incorrect' });
-            }
-            user.hashedPassword = await bcrypt.hash(newPassword, 10);
+      if (oldPassword && newPassword) {
+        const isMatch = await bcrypt.compare(oldPassword, user.hashedPassword);
+        if (!isMatch) {
+          return callback && callback({ success: false, error: 'Old password is incorrect' });
         }
+        user.hashedPassword = await bcrypt.hash(newPassword, 10);
+      }
 
-        await user.save();
-        callback && callback({
-            success: true,
-            user: {
-                id: user.id,
-                username: user.username,
-                aboutme: user.aboutme,
-                profilePicture: user.profilePicture,
-            }
-        });
+      await user.save();
+      callback && callback({
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          aboutme: user.aboutme,
+          profilePicture: user.profilePicture,
+        }
+      });
     } catch (err) {
-        // Handle duplicate username error
-        if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
-            return callback && callback({ success: false, error: "Username already taken" });
-        }
-        console.error('Error updating user info:', err);
-        callback && callback({ success: false, error: 'Internal server error' });
+      // Handle duplicate username error
+      if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
+        return callback && callback({ success: false, error: "Username already taken" });
+      }
+      console.error('Error updating user info:', err);
+      callback && callback({ success: false, error: 'Internal server error' });
     }
-});
+  });
 
   socket.on('getUserInfo', async ({ userId }, cb) => {
     try {
       const user = await User.findOne({ id: userId });
       if (user) {
         console.log('User found:', user);
-        cb({ 
-          success: true, 
+        cb({
+          success: true,
           user: {
             id: user.id,
             username: user.username,
@@ -504,6 +504,21 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error fetching user info:', err);
       cb({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  socket.on('deleteAccount', async (data, callback) => {
+    const { userId } = data;
+    console.log("Received deleteAccount for userId:", userId);
+    try {
+      const userResult = await User.deleteOne({ id: userId });
+      const msgResult = await Message.deleteMany({ $or: [{ userId }, { targetUserId: userId }] });
+      console.log("User delete result:", userResult);
+      console.log("Message delete result:", msgResult);
+      callback && callback({ success: true });
+    } catch (err) {
+      console.error('Error deleting account:', err);
+      callback && callback({ success: false, error: 'Failed to delete account' });
     }
   });
 });
