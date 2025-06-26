@@ -54,7 +54,7 @@ mongoose.connect(mongoUri).then(() => {
 
 const userSchema = new mongoose.Schema({
   id: { type: String, unique: true },
-  username: String,
+  username: { type: String, unique: true },
   hashedPassword: String,
   friends: [String],
   publicIdentityKeyX25519: String,
@@ -253,8 +253,13 @@ io.on('connection', (socket) => {
       console.log('User saved:', user);
       callback({ success: true });
     } catch (err) {
-      console.error('Error saving user:', err);
-      callback({ success: false });
+      if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
+        // Duplicate username error
+        callback({ success: false, error: "Username already taken" });
+      } else {
+        console.error('Error saving user:', err);
+        callback({ success: false, error: "Registration failed" });
+      }
     }
   });
 
@@ -428,55 +433,55 @@ io.on('connection', (socket) => {
   });
 
   socket.on('updateUserInfo', async (data, callback) => {
-    console.log('========== [updateUserInfo] ==========');does
+    console.log('========== [updateUserInfo] ==========');
     console.log('Received data:', JSON.stringify(data, null, 2));
     const { userId, username, aboutme, profilePicture, oldPassword, newPassword } = data;
     try {
-      const user = await User.findOne({ id: userId });
-      if (!user) {
-        return callback && callback({ success: false, error: 'User not found' });
-      }
-
-      // Username update
-      if (typeof username === 'string' && username.length > 0) {
-        user.username = username;
-      }
-
-      // About me update
-      if (typeof aboutme === 'string') {
-        user.aboutme = aboutme;
-      }
-
-      // Profile picture update (expects base64 string from frontend)
-      if (typeof profilePicture === 'string' && profilePicture.startsWith('data:image/')) {
-        const url = await saveProfilePicture(profilePicture, userId);
-        user.profilePicture = url;
-      }
-
-      // Password update
-      if (oldPassword && newPassword) {
-        const isMatch = await bcrypt.compare(oldPassword, user.hashedPassword);
-        if (!isMatch) {
-          return callback && callback({ success: false, error: 'Old password is incorrect' });
+        const user = await User.findOne({ id: userId });
+        if (!user) {
+            return callback && callback({ success: false, error: 'User not found' });
         }
-        user.hashedPassword = await bcrypt.hash(newPassword, 10);
-      }
 
-      await user.save();
-      callback && callback({
-        success: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          aboutme: user.aboutme,
-          profilePicture: user.profilePicture,
+        if (typeof username === 'string' && username.length > 0) {
+            user.username = username;
         }
-      });
+
+        if (typeof aboutme === 'string') {
+            user.aboutme = aboutme;
+        }
+
+        if (typeof profilePicture === 'string' && profilePicture.startsWith('data:image/')) {
+            const url = await saveProfilePicture(profilePicture, userId);
+            user.profilePicture = url;
+        }
+
+        if (oldPassword && newPassword) {
+            const isMatch = await bcrypt.compare(oldPassword, user.hashedPassword);
+            if (!isMatch) {
+                return callback && callback({ success: false, error: 'Old password is incorrect' });
+            }
+            user.hashedPassword = await bcrypt.hash(newPassword, 10);
+        }
+
+        await user.save();
+        callback && callback({
+            success: true,
+            user: {
+                id: user.id,
+                username: user.username,
+                aboutme: user.aboutme,
+                profilePicture: user.profilePicture,
+            }
+        });
     } catch (err) {
-      console.error('Error updating user info:', err);
-      callback && callback({ success: false, error: 'Internal server error' });
+        // Handle duplicate username error
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
+            return callback && callback({ success: false, error: "Username already taken" });
+        }
+        console.error('Error updating user info:', err);
+        callback && callback({ success: false, error: 'Internal server error' });
     }
-  });
+});
 
   socket.on('getUserInfo', async ({ userId }, cb) => {
     try {
