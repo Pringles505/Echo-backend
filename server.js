@@ -111,14 +111,18 @@ io.on('connection', (socket) => {
   const token = socket.handshake.auth.token;
 
   if (token) {
-    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-      if (!err && decoded) {
-        userSocketMap[decoded.id] = socket.id;
-        console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
-        console.log('Current userSocketMap:', userSocketMap);
-      }
-    });
-  }
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (!err && decoded) {
+      userSocketMap[decoded.id] = socket.id;
+
+      // Notify other clients that user is online
+      socket.broadcast.emit('userOnline', { userId: decoded.id });
+
+      console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
+    }
+  });
+}
+
 
   socket.on('fetchUsername', async (userId, callback) => {
     console.log('Fetching username for user:', userId);
@@ -214,15 +218,20 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
+  console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
 
-    for (const userId in userSocketMap) {
-      if (userSocketMap[userId] === socket.id) {
-        delete userSocketMap[userId];
-        break;
-      }
+  for (const userId in userSocketMap) {
+    if (userSocketMap[userId] === socket.id) {
+      delete userSocketMap[userId];
+
+      // Notify other clients user is offline
+      socket.broadcast.emit('userOffline', { userId });
+
+      break;
     }
-  });
+  }
+});
+
 
   socket.on('register', async (data, callback) => {
     const { username, password, keyBundle, aboutme, profilePicture } = data;
