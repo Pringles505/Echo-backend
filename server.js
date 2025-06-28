@@ -521,8 +521,121 @@ io.on('connection', (socket) => {
       callback && callback({ success: false, error: 'Failed to delete account' });
     }
   });
+
+  // Add this to your existing socket.io server code
+socket.on('addFriend', async (data, callback) => {
+  const { userId, targetUserId } = data;
+  console.log(`Adding friend: ${userId} wants to add ${targetUserId}`);
+
+  try {
+    // Check if both users exist
+    const [user, targetUser] = await Promise.all([
+      User.findOne({ id: userId }),
+      User.findOne({ id: targetUserId })
+    ]);
+
+    if (!user || !targetUser) {
+      console.log('One or both users not found');
+      return callback({ success: false, error: 'User(s) not found' });
+    }
+
+    // Check if already friends
+    if (user.friends.includes(targetUserId)) {
+      console.log('Users are already friends');
+      return callback({ success: false, error: 'Already friends' });
+    }
+
+    // Add targetUserId to user's friends array
+    user.friends.push(targetUserId);
+    await user.save();
+
+    console.log(`Successfully added ${targetUserId} to ${userId}'s friends list`);
+
+    // Notify both users about the new friendship
+    const userSocketId = userSocketMap[userId];
+    const targetSocketId = userSocketMap[targetUserId];
+
+    if (userSocketId) {
+      io.to(userSocketId).emit('friendAdded', {
+        friendId: targetUserId,
+        friendUsername: targetUser.username
+      });
+    }
+
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('friendAdded', {
+        friendId: userId,
+        friendUsername: user.username
+      });
+    }
+
+    callback({ success: true });
+  } catch (err) {
+    console.error('Error adding friend:', err);
+    callback({ success: false, error: 'Failed to add friend' });
+  }
 });
+// Add this to your existing socket.io server code
+socket.on('removeFriend', async (data, callback) => {
+  const { userId, targetUserId } = data;
+  console.log(`Removing friend: ${userId} wants to remove ${targetUserId}`);
+
+  try {
+    // Check if both users exist
+    const [user, targetUser] = await Promise.all([
+      User.findOne({ id: userId }),
+      User.findOne({ id: targetUserId })
+    ]);
+
+    if (!user || !targetUser) {
+      console.log('One or both users not found');
+      return callback({ success: false, error: 'User(s) not found' });
+    }
+
+    // Check if they are actually friends
+    const userFriendIndex = user.friends.indexOf(targetUserId);
+    const targetFriendIndex = targetUser.friends.indexOf(userId);
+
+    if (userFriendIndex === -1 || targetFriendIndex === -1) {
+      console.log('Users are not friends');
+      return callback({ success: false, error: 'Not friends' });
+    }
+
+    // Remove from both users' friend lists
+    user.friends.splice(userFriendIndex, 1);
+    targetUser.friends.splice(targetFriendIndex, 1);
+
+    await Promise.all([user.save(), targetUser.save()]);
+
+    console.log(`Successfully removed friendship between ${userId} and ${targetUserId}`);
+
+    // Notify both users about the removed friendship
+    const userSocketId = userSocketMap[userId];
+    const targetSocketId = userSocketMap[targetUserId];
+
+    if (userSocketId) {
+      io.to(userSocketId).emit('friendRemoved', {
+        friendId: targetUserId
+      });
+    }
+
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('friendRemoved', {
+        friendId: userId
+      });
+    }
+
+    callback({ success: true });
+  } catch (err) {
+    console.error('Error removing friend:', err);
+    callback({ success: false, error: 'Failed to remove friend' });
+  }
+});
+});
+
+
 
 server.listen(3001, () => {
   console.log('listening on *:3001');
 });
+
