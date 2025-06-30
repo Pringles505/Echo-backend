@@ -584,7 +584,7 @@ socket.on('addFriend', async (data, callback) => {
     callback({ success: false, error: 'Failed to add friend' });
   }
 });
-// Add this to your existing socket.io server code
+
 socket.on('removeFriend', async (data, callback) => {
   const { userId, targetUserId } = data;
   console.log(`Removing friend: ${userId} wants to remove ${targetUserId}`);
@@ -638,6 +638,33 @@ socket.on('removeFriend', async (data, callback) => {
   } catch (err) {
     console.error('Error removing friend:', err);
     callback({ success: false, error: 'Failed to remove friend' });
+  }
+});
+
+socket.on("getFriendsList", async ({ userId }, callback) => {
+  try {
+    const user = await User.findById(userId).populate('friends');
+    
+    if (!user) {
+      return callback({ success: false, message: "Usuario no encontrado" });
+    }
+
+    // Obtener información básica de cada amigo
+    const friendsList = await Promise.all(
+      user.friends.map(async friendId => {
+        const friend = await User.findById(friendId);
+        return {
+          id: friend.id,
+          username: friend.username,
+          profilePicture: friend.profilePicture
+        };
+      })
+    );
+
+    callback({ success: true, friends: friendsList });
+  } catch (error) {
+    console.error("Error al obtener lista de amigos:", error);
+    callback({ success: false, message: "Error al obtener amigos" });
   }
 });
 });
