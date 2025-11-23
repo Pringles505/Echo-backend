@@ -67,7 +67,7 @@ const userSchema = new mongoose.Schema({
 
 const messageSchema = new mongoose.Schema({
   is_initial: Boolean,
-  text: String,
+  payload: String,
   userId: String,
   targetUserId: String,
   username: String,
@@ -111,17 +111,17 @@ io.on('connection', (socket) => {
   const token = socket.handshake.auth.token;
 
   if (token) {
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (!err && decoded) {
-      userSocketMap[decoded.id] = socket.id;
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+      if (!err && decoded) {
+        userSocketMap[decoded.id] = socket.id;
 
-      // Notify other clients that user is online
-      socket.broadcast.emit('userOnline', { userId: decoded.id });
+        // Notify other clients that user is online
+        socket.broadcast.emit('userOnline', { userId: decoded.id });
 
-      console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
-    }
-  });
-}
+        console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
+      }
+    });
+  }
 
 
   socket.on('fetchUsername', async (userId, callback) => {
@@ -218,19 +218,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-  console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
+    console.log(`🔴User with socket ID ${socket.id} disconnected.🔴`);
 
-  for (const userId in userSocketMap) {
-    if (userSocketMap[userId] === socket.id) {
-      delete userSocketMap[userId];
+    for (const userId in userSocketMap) {
+      if (userSocketMap[userId] === socket.id) {
+        delete userSocketMap[userId];
 
-      // Notify other clients user is offline
-      socket.broadcast.emit('userOffline', { userId });
+        // Notify other clients user is offline
+        socket.broadcast.emit('userOffline', { userId });
 
-      break;
+        break;
+      }
     }
-  }
-});
+  });
 
 
   socket.on('register', async (data, callback) => {
@@ -378,19 +378,19 @@ io.on('connection', (socket) => {
 
 
   socket.on('newMessage', async (data) => {
-    const { is_initial, text, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
+    const { is_initial, payload, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
 
-    if (!text || !userId || !targetUserId || !username) {
-      console.error('Missing fields in message data:', { text, userId, targetUserId, username, messageNumber, is_initial });
+    if ((!payload) || !userId || !targetUserId || !username) {
+      console.error('Missing fields in message data:', { payload, userId, targetUserId, username, messageNumber, is_initial });
       return;
     }
 
-    console.log('Saving message:', { text, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
+    console.log('Saving message:', { payload, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
 
     try {
       const message = new Message({
         is_initial,
-        text,
+        payload,
         userId,
         targetUserId,
         username,
@@ -421,6 +421,30 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('initiateCall', ({ targetUserId, callId, callerId, callerName }) => {
+    console.log('Received initiateCall:', { targetUserId, callId, callerId, callerName }); // ADD THIS
+    const targetSocketId = userSocketMap[targetUserId];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('incomingCall', { callId, callerId, callerName });
+      console.log(`Call notification sent to ${targetUserId} (socket: ${targetSocketId})`);
+    } else {
+      console.log(`User ${targetUserId} is not online`);
+    }
+  });
+
+  socket.on('declineCall', ({ callerId, callId }) => {
+    const callerSocketId = userSocketMap[callerId];
+    if (callerSocketId) {
+      io.to(callerSocketId).emit('callDeclined', { callId });
+    }
+  });
+
+  socket.on('endCall', ({ odebukiUserId }) => {
+    const targetSocketId = userSocketMap[odebukiUserId];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('callEnded');
+    }
+  });
 
   socket.on('searchUser', async (data, callback) => {
     const username = data.searchTerm;
@@ -532,114 +556,114 @@ io.on('connection', (socket) => {
   });
 
   // Add this to your existing socket.io server code
-socket.on('addFriend', async (data, callback) => {
-  const { userId, targetUserId } = data;
-  console.log(`Adding friend: ${userId} wants to add ${targetUserId}`);
+  socket.on('addFriend', async (data, callback) => {
+    const { userId, targetUserId } = data;
+    console.log(`Adding friend: ${userId} wants to add ${targetUserId}`);
 
-  try {
-    // Check if both users exist
-    const [user, targetUser] = await Promise.all([
-      User.findOne({ id: userId }),
-      User.findOne({ id: targetUserId })
-    ]);
+    try {
+      // Check if both users exist
+      const [user, targetUser] = await Promise.all([
+        User.findOne({ id: userId }),
+        User.findOne({ id: targetUserId })
+      ]);
 
-    if (!user || !targetUser) {
-      console.log('One or both users not found');
-      return callback({ success: false, error: 'User(s) not found' });
+      if (!user || !targetUser) {
+        console.log('One or both users not found');
+        return callback({ success: false, error: 'User(s) not found' });
+      }
+
+      // Check if already friends
+      if (user.friends.includes(targetUserId)) {
+        console.log('Users are already friends');
+        return callback({ success: false, error: 'Already friends' });
+      }
+
+      // Add targetUserId to user's friends array
+      user.friends.push(targetUserId);
+      await user.save();
+
+      console.log(`Successfully added ${targetUserId} to ${userId}'s friends list`);
+
+      // Notify both users about the new friendship
+      const userSocketId = userSocketMap[userId];
+      const targetSocketId = userSocketMap[targetUserId];
+
+      if (userSocketId) {
+        io.to(userSocketId).emit('friendAdded', {
+          friendId: targetUserId,
+          friendUsername: targetUser.username
+        });
+      }
+
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('friendAdded', {
+          friendId: userId,
+          friendUsername: user.username
+        });
+      }
+
+      callback({ success: true });
+    } catch (err) {
+      console.error('Error adding friend:', err);
+      callback({ success: false, error: 'Failed to add friend' });
     }
+  });
+  // Add this to your existing socket.io server code
+  socket.on('removeFriend', async (data, callback) => {
+    const { userId, targetUserId } = data;
+    console.log(`Removing friend: ${userId} wants to remove ${targetUserId}`);
 
-    // Check if already friends
-    if (user.friends.includes(targetUserId)) {
-      console.log('Users are already friends');
-      return callback({ success: false, error: 'Already friends' });
+    try {
+      // Check if both users exist
+      const [user, targetUser] = await Promise.all([
+        User.findOne({ id: userId }),
+        User.findOne({ id: targetUserId })
+      ]);
+
+      if (!user || !targetUser) {
+        console.log('One or both users not found');
+        return callback({ success: false, error: 'User(s) not found' });
+      }
+
+      // Check if they are actually friends
+      const userFriendIndex = user.friends.indexOf(targetUserId);
+      const targetFriendIndex = targetUser.friends.indexOf(userId);
+
+      if (userFriendIndex === -1 || targetFriendIndex === -1) {
+        console.log('Users are not friends');
+        return callback({ success: false, error: 'Not friends' });
+      }
+
+      // Remove from both users' friend lists
+      user.friends.splice(userFriendIndex, 1);
+      targetUser.friends.splice(targetFriendIndex, 1);
+
+      await Promise.all([user.save(), targetUser.save()]);
+
+      console.log(`Successfully removed friendship between ${userId} and ${targetUserId}`);
+
+      // Notify both users about the removed friendship
+      const userSocketId = userSocketMap[userId];
+      const targetSocketId = userSocketMap[targetUserId];
+
+      if (userSocketId) {
+        io.to(userSocketId).emit('friendRemoved', {
+          friendId: targetUserId
+        });
+      }
+
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('friendRemoved', {
+          friendId: userId
+        });
+      }
+
+      callback({ success: true });
+    } catch (err) {
+      console.error('Error removing friend:', err);
+      callback({ success: false, error: 'Failed to remove friend' });
     }
-
-    // Add targetUserId to user's friends array
-    user.friends.push(targetUserId);
-    await user.save();
-
-    console.log(`Successfully added ${targetUserId} to ${userId}'s friends list`);
-
-    // Notify both users about the new friendship
-    const userSocketId = userSocketMap[userId];
-    const targetSocketId = userSocketMap[targetUserId];
-
-    if (userSocketId) {
-      io.to(userSocketId).emit('friendAdded', {
-        friendId: targetUserId,
-        friendUsername: targetUser.username
-      });
-    }
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friendAdded', {
-        friendId: userId,
-        friendUsername: user.username
-      });
-    }
-
-    callback({ success: true });
-  } catch (err) {
-    console.error('Error adding friend:', err);
-    callback({ success: false, error: 'Failed to add friend' });
-  }
-});
-// Add this to your existing socket.io server code
-socket.on('removeFriend', async (data, callback) => {
-  const { userId, targetUserId } = data;
-  console.log(`Removing friend: ${userId} wants to remove ${targetUserId}`);
-
-  try {
-    // Check if both users exist
-    const [user, targetUser] = await Promise.all([
-      User.findOne({ id: userId }),
-      User.findOne({ id: targetUserId })
-    ]);
-
-    if (!user || !targetUser) {
-      console.log('One or both users not found');
-      return callback({ success: false, error: 'User(s) not found' });
-    }
-
-    // Check if they are actually friends
-    const userFriendIndex = user.friends.indexOf(targetUserId);
-    const targetFriendIndex = targetUser.friends.indexOf(userId);
-
-    if (userFriendIndex === -1 || targetFriendIndex === -1) {
-      console.log('Users are not friends');
-      return callback({ success: false, error: 'Not friends' });
-    }
-
-    // Remove from both users' friend lists
-    user.friends.splice(userFriendIndex, 1);
-    targetUser.friends.splice(targetFriendIndex, 1);
-
-    await Promise.all([user.save(), targetUser.save()]);
-
-    console.log(`Successfully removed friendship between ${userId} and ${targetUserId}`);
-
-    // Notify both users about the removed friendship
-    const userSocketId = userSocketMap[userId];
-    const targetSocketId = userSocketMap[targetUserId];
-
-    if (userSocketId) {
-      io.to(userSocketId).emit('friendRemoved', {
-        friendId: targetUserId
-      });
-    }
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friendRemoved', {
-        friendId: userId
-      });
-    }
-
-    callback({ success: true });
-  } catch (err) {
-    console.error('Error removing friend:', err);
-    callback({ success: false, error: 'Failed to remove friend' });
-  }
-});
+  });
 });
 
 
