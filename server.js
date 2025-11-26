@@ -376,7 +376,6 @@ io.on('connection', (socket) => {
     }
   });
 
-
   socket.on('newMessage', async (data) => {
     const { is_initial, payload, userId, targetUserId, username, messageNumber, publicEphemeralKey } = data;
 
@@ -388,6 +387,13 @@ io.on('connection', (socket) => {
     console.log('Saving message:', { payload, userId, targetUserId, username, messageNumber, is_initial, publicEphemeralKey });
 
     try {
+      // Fetch sender's profile information
+      const sender = await User.findOne({ id: userId });
+      if (!sender) {
+        console.error('Sender not found:', userId);
+        return;
+      }
+
       const message = new Message({
         is_initial,
         payload,
@@ -405,15 +411,23 @@ io.on('connection', (socket) => {
       // Create consistent room name
       const room = [userId, targetUserId].sort().join('_');
 
-      // Emit only to that room (both users)
-      io.to(room).emit('newMessage', message);
+      // Enhanced message object with sender profile info
+      const messageWithProfile = {
+        ...message.toObject(),
+        profileImage: sender.profilePicture || null,
+        timestamp: message.createdAt,
+      };
 
-      // Optionally, emit a separate 'notification' event to the other user
+      // Emit to the room (for users who have the chat open)
+      io.to(room).emit('newMessage', messageWithProfile);
+
       const targetSocketId = userSocketMap[targetUserId];
       if (targetSocketId) {
-        io.to(targetSocketId).emit('notification', {
-          messageData: message,
-        });
+        console.log(`📨 Sending notification to ${targetUserId} (socket: ${targetSocketId})`);
+        // Emit to the target user's socket directly
+        io.to(targetSocketId).emit('newMessage', messageWithProfile);
+      } else {
+        console.log(`❌ User ${targetUserId} is offline`);
       }
 
     } catch (err) {
@@ -422,7 +436,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('initiateCall', ({ targetUserId, callId, callerId, callerName }) => {
-    console.log('Received initiateCall:', { targetUserId, callId, callerId, callerName }); // ADD THIS
+    console.log('Received initiateCall:', { targetUserId, callId, callerId, callerName });
     const targetSocketId = userSocketMap[targetUserId];
     if (targetSocketId) {
       io.to(targetSocketId).emit('incomingCall', { callId, callerId, callerName });
