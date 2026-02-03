@@ -23,6 +23,88 @@ async function saveProfilePicture(base64Image, userId) {
   return `/uploads/${filename}`;
 }
 
+async function createCallEventMessage({ callId, status, duration = 0 }) {
+  try {
+    const call = await Call.findOne({ callId });
+    if (!call) {
+      console.log('Call not found for event message:', callId);
+      return null;
+    }
+
+    // Check if a call event message already exists for this callId
+    const existingCallEvent = await Message.findOne({
+      messageType: 'call_event',
+      'callData.callId': callId
+    });
+
+    if (existingCallEvent) {
+      console.log('⚠️ Call event message already exists for callId:', callId);
+      return existingCallEvent;
+    }
+
+    const sender = await User.findOne({ id: call.callerId });
+    if (!sender) {
+      console.log('Sender not found:', call.callerId);
+      return null;
+    }
+
+    const message = new Message({
+      messageType: 'call_event',
+      callData: {
+        status,
+        callType: call.callType,
+        duration,
+        callerId: call.callerId,
+        receiverId: call.receiverId,
+        callId: call.callId
+      },
+      userId: call.callerId,
+      targetUserId: call.receiverId,
+      username: sender.username,
+      seenStatus: false,
+      messageNumber: 0, // Call events don't need message numbers
+      is_initial: false,
+      payload: '', // No encryption for call events
+      publicEphemeralKey: ''
+    });
+
+    await message.save();
+    console.log('✅ Call event message saved:', status);
+
+    const messageWithProfile = {
+      ...message.toObject(),
+      profileImage: sender.profilePicture || null,
+      timestamp: message.createdAt,
+    };
+
+    // Emit to both users
+    const room = [call.callerId, call.receiverId].sort().join('_');
+    io.to(room).emit('newMessage', messageWithProfile);
+
+    // Also emit directly to users who are NOT in the room
+    const callerSocketId = userSocketMap[call.callerId];
+    const receiverSocketId = userSocketMap[call.receiverId];
+
+    if (callerSocketId) {
+      const callerSocket = io.sockets.sockets.get(callerSocketId);
+      if (!callerSocket || !callerSocket.rooms.has(room)) {
+        io.to(callerSocketId).emit('newMessage', messageWithProfile);
+      }
+    }
+    if (receiverSocketId) {
+      const receiverSocket = io.sockets.sockets.get(receiverSocketId);
+      if (!receiverSocket || !receiverSocket.rooms.has(room)) {
+        io.to(receiverSocketId).emit('newMessage', messageWithProfile);
+      }
+    }
+
+    return message;
+  } catch (err) {
+    console.error('Error creating call event message:', err);
+    return null;
+  }
+}
+
 const userSocketMap = {};
 
 const app = express();
@@ -38,7 +120,7 @@ const io = socketIo(server, {
 app.use(cors({
   origin: ['http://localhost:5173', 'https://chat-tuah-frontend.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 }));
 app.use(express.json());
@@ -75,10 +157,45 @@ const messageSchema = new mongoose.Schema({
   publicEphemeralKey: String,
   seenStatus: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
+
+  messageType: {
+    type: String,
+    enum: ['text', 'image', 'tenor', 'call_event'],
+    default: 'text'
+  },
+  callData: {
+    status: {
+      type: String,
+      enum: ['ringing', 'in-progress', 'declined', 'ended', 'missed']
+    },
+    callType: String,
+    duration: Number,
+    callerId: String,
+    receiverId: String,
+    callId: String
+  }
 });
+
+const calls = new mongoose.Schema({
+  callId: { type: String, unique: true },
+  callerId: String,
+  receiverId: String,
+  startedAt: { type: Date, default: Date.now },
+  endedAt: { type: Date, default: null },
+  callType: { type: String, default: 'video' },
+  status: {
+    type: String,
+    enum: ['ringing', 'in-progress', 'declined', 'ended', 'missed'],
+    default: 'ringing',
+  },
+  duration: { type: Number, default: 0 },
+});
+
+
 
 const Message = mongoose.model('Message', messageSchema);
 const User = mongoose.model('User', userSchema);
+const Call = mongoose.model('Call', calls);
 
 const authenticate = (socket, next) => {
   const token = socket.handshake.auth.token;
@@ -118,11 +235,18 @@ io.on('connection', (socket) => {
         // Notify other clients that user is online
         socket.broadcast.emit('userOnline', { userId: decoded.id });
 
+        // Send the full list of online users to the connecting client
+        socket.emit('onlineUsersList', { onlineUsers: Object.keys(userSocketMap) });
+
         console.log(`User ${decoded.username} (ID: ${decoded.id}) mapped to socket ${socket.id}`);
       }
     });
   }
 
+
+  socket.on('getOnlineUsers', (callback) => {
+    callback({ onlineUsers: Object.keys(userSocketMap) });
+  });
 
   socket.on('fetchUsername', async (userId, callback) => {
     console.log('Fetching username for user:', userId);
@@ -421,11 +545,15 @@ io.on('connection', (socket) => {
       // Emit to the room (for users who have the chat open)
       io.to(room).emit('newMessage', messageWithProfile);
 
+      // Also notify the target user directly if they are NOT in the room
+      // (i.e., they don't have this chat open but are online)
       const targetSocketId = userSocketMap[targetUserId];
       if (targetSocketId) {
-        console.log(`📨 Sending notification to ${targetUserId} (socket: ${targetSocketId})`);
-        // Emit to the target user's socket directly
-        io.to(targetSocketId).emit('newMessage', messageWithProfile);
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (!targetSocket || !targetSocket.rooms.has(room)) {
+          console.log(`📨 Sending notification to ${targetUserId} (socket: ${targetSocketId})`);
+          io.to(targetSocketId).emit('newMessage', messageWithProfile);
+        }
       } else {
         console.log(`❌ User ${targetUserId} is offline`);
       }
@@ -435,28 +563,165 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('initiateCall', ({ targetUserId, callId, callerId, callerName }) => {
+  socket.on('initiateCall', async ({ targetUserId, callId, callerId, callerName }) => {
     console.log('Received initiateCall:', { targetUserId, callId, callerId, callerName });
     const targetSocketId = userSocketMap[targetUserId];
+    const targetUserIdString = String(targetUserId);
+
     if (targetSocketId) {
       io.to(targetSocketId).emit('incomingCall', { callId, callerId, callerName });
       console.log(`Call notification sent to ${targetUserId} (socket: ${targetSocketId})`);
+
+      const call = new Call({
+        callId,
+        callerId,
+        receiverId: targetUserIdString,
+        status: 'ringing',
+        startedAt: new Date(),
+        endedAt: null,
+        callType: 'video',
+        duration: 0,
+      });
+      await call.save();
+
+      setTimeout(async () => {
+        const currentCall = await Call.findOne({ callId });
+        if (currentCall && currentCall.status === 'ringing') {
+          currentCall.status = 'missed';
+          currentCall.endedAt = new Date();
+          await currentCall.save();
+ 
+          await createCallEventMessage({
+            callId,
+            status: 'missed',
+            duration: 0
+          });
+
+          console.log('Call marked as missed:', callId);
+        }
+        // 30 Seconds
+      }, 30000); 
+
     } else {
       console.log(`User ${targetUserId} is not online`);
     }
   });
 
-  socket.on('declineCall', ({ callerId, callId }) => {
-    const callerSocketId = userSocketMap[callerId];
-    if (callerSocketId) {
-      io.to(callerSocketId).emit('callDeclined', { callId });
+  socket.on('acceptCall', async ({ callId }) => {
+    try {
+      const call = await Call.findOneAndUpdate(
+        { callId },
+        { $set: { status: 'in-progress' } },
+        { new: true }
+      );
+
+      if (!call) {
+        console.log('Call not found for acceptCall:', callId);
+        return;
+      }
+
+      // Notify caller that call was accepted (optional)
+      const callerSocketId = userSocketMap[call.callerId];
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('callAccepted', { callId });
+      }
+
+      console.log('Call marked as in-progress:', callId);
+    } catch (err) {
+      console.error('Error in acceptCall:', err);
     }
   });
 
-  socket.on('endCall', ({ odebukiUserId }) => {
+  socket.on('declineCall', async ({ callerId, callId }) => {
+    const callerSocketId = userSocketMap[callerId];
+
+    if (callerSocketId) {
+      io.to(callerSocketId).emit('callDeclined', { callId });
+    }
+
+    try {
+      await Call.findOneAndUpdate(
+        { callId },
+        {
+          $set: {
+            status: 'declined',
+            endedAt: new Date(),
+            duration: 0,
+          },
+        }
+      );
+      console.log('Call marked as declined:', callId);
+
+      // Create call event message for declined call
+      await createCallEventMessage({
+        callId,
+        status: 'declined',
+        duration: 0
+      });
+
+    } catch (err) {
+      console.error('Error updating declined call:', err);
+    }
+  });
+
+  socket.on('endCall', async ({ odebukiUserId, callId }) => {
     const targetSocketId = userSocketMap[odebukiUserId];
     if (targetSocketId) {
-      io.to(targetSocketId).emit('callEnded');
+      io.to(targetSocketId).emit('callEnded', { callId });
+    }
+
+    try {
+      const call = await Call.findOne({ callId });
+
+      if (!call) {
+        console.log('Call not found for endCall:', callId);
+        return;
+      }
+
+      const endedAt = new Date();
+      const durationSeconds = Math.max(
+        0,
+        Math.round((endedAt - call.startedAt) / 1000)
+      );
+
+      call.status = 'ended';
+      call.endedAt = endedAt;
+      call.duration = durationSeconds;
+
+      await call.save();
+
+      console.log('Call ended and updated:', {
+        callId,
+        durationSeconds,
+      });
+
+      // Create call event message in chat
+      await createCallEventMessage({
+        callId,
+        status: 'ended',
+        duration: durationSeconds
+      });
+
+    } catch (err) {
+      console.error('Error ending call:', err);
+    }
+  });
+
+  // Handle video state changes during call
+  socket.on('videoStateChanged', ({ targetUserId, isEnabled }) => {
+    const targetSocketId = userSocketMap[targetUserId];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('videoStateChanged', { isEnabled });
+      console.log(`Video state changed for ${targetUserId}: ${isEnabled ? 'enabled' : 'disabled'}`);
+    }
+  });
+
+  // Handle audio state changes during call
+  socket.on('audioStateChanged', ({ targetUserId, isEnabled }) => {
+    const targetSocketId = userSocketMap[targetUserId];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('audioStateChanged', { isEnabled });
+      console.log(`Audio state changed for ${targetUserId}: ${isEnabled ? 'enabled' : 'disabled'}`);
     }
   });
 
