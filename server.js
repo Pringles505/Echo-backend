@@ -384,7 +384,7 @@ io.on('connection', (socket) => {
 
       await user.save();
       console.log('User saved:', user);
-      callback({ success: true });
+      callback({ success: true, userId: id });
     } catch (err) {
       if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
         // Duplicate username error
@@ -447,7 +447,7 @@ io.on('connection', (socket) => {
       );
       console.log('Generated Token:', token);
 
-      callback({ success: true, token });
+      callback({ success: true, token, userId: user.id });
     } catch (err) {
       console.error('Error during login:', err);
       callback({ success: false, error: 'Login failed' });
