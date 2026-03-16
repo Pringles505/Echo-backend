@@ -362,6 +362,30 @@ const Group = mongoose.model('Group', groupSchema);
 const GroupMember = mongoose.model('GroupMember', groupMemberSchema);
 const GroupSequence = mongoose.model('GroupSequence', groupSequenceSchema);
 
+const keyPackageSchema = new mongoose.Schema({
+  userId: { type: String, required: true, unique: true },
+  initKeyB64: { type: String, required: true },
+  updatedAt: { type: Date, default: Date.now },
+});
+const KeyPackage = mongoose.model('KeyPackage', keyPackageSchema);
+
+async function syncKeyPackageIndexes() {
+  try {
+    const droppedIndexes = await KeyPackage.syncIndexes();
+    console.log('[MLS] KeyPackage indexes synced', droppedIndexes);
+  } catch (err) {
+    console.error('[MLS] Failed to sync KeyPackage indexes:', err);
+  }
+}
+
+if (mongoose.connection.readyState === 1) {
+  void syncKeyPackageIndexes();
+} else {
+  mongoose.connection.once('open', () => {
+    void syncKeyPackageIndexes();
+  });
+}
+
 function makeConversationKey(userA, userB) {
   return [String(userA ?? ''), String(userB ?? '')].sort().join('_');
 }
@@ -592,6 +616,24 @@ io.on('connection', (socket) => {
 
     // Send the full list of online users to the connecting client
     socket.emit('onlineUsersList', { onlineUsers: Object.keys(userSocketMap) });
+
+    // Push any pending MLS welcomes to the newly-connected user
+    // (si el usuario esta offline que no se pierda los welcomes)
+    const authedId = String(socket.user.id);
+    Message.find({
+      conversationType: 'group',
+      contentType: 'welcome',
+      targetUserId: authedId,
+    }).lean().then((stored) => {
+      for (const msg of stored) {
+        try {
+          const welcome = JSON.parse(msg.payload);
+          socket.emit('groupWelcome', { groupId: msg.groupId, welcome });
+        } catch { /* skip malformed */ }
+      }
+    }).catch((err) => {
+      console.error('[MLS] Error pushing pending welcomes on connect:', err);
+    });
   }
 
 
@@ -1257,8 +1299,8 @@ io.on('connection', (socket) => {
     const wantsMls = mlsEnabled === true;
     const normalizedCipherSuite = wantsMls
       ? (typeof cipherSuite === 'string' && cipherSuite.trim().length > 0
-          ? cipherSuite.trim()
-          : 'MLS-MVP/X25519_AES256GCM_SHA256')
+        ? cipherSuite.trim()
+        : 'MLS-MVP/X25519_AES256GCM_SHA256')
       : null;
 
     const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
@@ -1345,7 +1387,11 @@ io.on('connection', (socket) => {
           mlsEnabled: wantsMls,
           epoch: 0,
           cipherSuite: normalizedCipherSuite,
-        }
+        },
+        members: [
+          { userId: authedUserIdStr, leafIndex: 0 },
+          ...normalizedMemberIds.map((id, index) => ({ userId: id, leafIndex: index + 1 })),
+        ],
       });
     } catch (err) {
       console.error('Error creating group:', err);
@@ -1552,12 +1598,14 @@ io.on('connection', (socket) => {
 
       // Este es diferente a los otros create group, tiene que fetch el numero de leafindex
       // Add the new member to the group
-      await GroupMember.create({ groupId: groupIdStr, 
-                                userId: memberIdStr, 
-                                role: 'member', 
-                                joinedAt: new Date(),
-                                leafIndex: nextLeafIndex,
-                                status: 'active' });
+      await GroupMember.create({
+        groupId: groupIdStr,
+        userId: memberIdStr,
+        role: 'member',
+        joinedAt: new Date(),
+        leafIndex: nextLeafIndex,
+        status: 'active'
+      });
 
       const nowIso = new Date().toISOString();
       const room = `group:${groupIdStr}`;
@@ -1692,7 +1740,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      if (!groupIdStr || typeof nonce !== 'string' || nonce.length === 0) {
+      if (!groupIdStr) {
         ack({ success: false, error: 'Missing required fields' });
         return;
       }
@@ -1719,7 +1767,12 @@ io.on('connection', (socket) => {
           ack({ success: false, error: 'Forbidden' });
           return;
         }
-      } else if (typeof payload !== 'string' || payload.length === 0) {
+      } else if (
+        typeof payload !== 'string' ||
+        payload.length === 0 ||
+        typeof nonce !== 'string' ||
+        nonce.length === 0
+      ) {
         ack({ success: false, error: 'Missing required fields' });
         return;
       }
@@ -1821,11 +1874,11 @@ io.on('connection', (socket) => {
     const recipientUserIdStr = String(recipientUserId ?? '');
     const senderUserIdStr = String(authedUserId);
 
-     if (!welcome || typeof welcome !== 'object' || !recipientUserIdStr || !groupIdStr){
+    if (!welcome || typeof welcome !== 'object' || !recipientUserIdStr || !groupIdStr) {
       return cb?.({ success: false, error: 'Missing required fields' });
-     }
+    }
 
-     try {
+    try {
       const [group, senderMembership, recipientMembership, sender] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: senderUserIdStr }).lean(),
@@ -1855,18 +1908,48 @@ io.on('connection', (socket) => {
         artifact: welcome,
       });
 
-     const recipientSocketId = userSocketMap[recipientUserIdStr];
-     if (recipientSocketId) {
-      io.to(recipientSocketId).emit('groupWelcome', { 
-        groupId: groupIdStr, 
-        welcome });
-     }
-     return cb?.({ success: true, delivered: Boolean(recipientSocketId) });
+      const recipientSocketId = userSocketMap[recipientUserIdStr];
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('groupWelcome', {
+          groupId: groupIdStr,
+          welcome
+        });
+      }
+      return cb?.({ success: true, delivered: Boolean(recipientSocketId) });
 
-     }catch (err) {
+    } catch (err) {
       console.error('Error sending group welcome:', err);
       cb?.({ success: false, error: 'Internal server error' });
-     }
+    }
+  });
+
+  socket.on('fetchPendingWelcomes', async (_, cb) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
+
+    try {
+      const stored = await Message.find({
+        conversationType: 'group',
+        contentType: 'welcome',
+        targetUserId: String(authedUserId),
+      }).lean();
+
+      const welcomes = stored
+        .map((msg) => {
+          try {
+            const welcome = JSON.parse(msg.payload);
+            return { groupId: msg.groupId, welcome };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      cb?.({ success: true, welcomes });
+    } catch (err) {
+      console.error('Error fetching pending welcomes:', err);
+      cb?.({ success: false, error: 'Internal server error' });
+    }
   });
 
   socket.on('sendGroupCommit', async ({ groupId, commit }, cb) => {
@@ -1926,6 +2009,58 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error sending group commit:', err);
       return cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  socket.on('publishKeyPackage', async ({ initKeyB64 }, cb) => {
+    const userId = String(socket.user?.id ?? '');
+    const normalizedInitKeyB64 = typeof initKeyB64 === 'string' ? initKeyB64.trim() : '';
+
+    if (!userId) return cb?.({ success: false, error: 'unauthorized' });
+    if (!normalizedInitKeyB64)
+      return cb?.({ success: false, error: 'Missing initKeyB64' });
+
+    try {
+      await KeyPackage.findOneAndUpdate(
+        { userId },
+        {
+          $set: {
+            userId,
+            initKeyB64: normalizedInitKeyB64,
+            updatedAt: new Date(),
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        }
+      );
+      cb?.({ success: true });
+    } catch (err) {
+      console.error('publishKeyPackage error:', {
+        userId,
+        initKeyLength: normalizedInitKeyB64.length,
+        message: err?.message,
+        code: err?.code,
+        stack: err?.stack,
+      });
+      cb?.({ success: false, error: err?.message || 'Internal server error' });
+    }
+  })
+
+  socket.on('fetchKeyPackage', async ({ userId: targetId }, cb) => {
+    const callerId = socket.user?.id;
+    if (!callerId) return cb?.({ success: false, error: 'unauthorized' });
+
+    try {
+      const kp = await KeyPackage.findOne({ userId: String(targetId ?? '') }).lean();
+      if (!kp) return cb?.({ success: false, error: 'KeyPackage not found' });
+      cb?.({ success: true, initKeyB64: kp.initKeyB64 });
+    } catch (err) {
+      console.error('fetchKeyPackage error:', err);
+      cb?.({ success: false, error: 'Internal server error' });
     }
   });
 
