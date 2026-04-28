@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "release": "standard-version",
+    "release:first": "standard-version --first-release"
   },
   "keywords": [],
   "author": "",
