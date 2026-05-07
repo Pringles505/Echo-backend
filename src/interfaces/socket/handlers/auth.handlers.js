@@ -57,7 +57,14 @@ function registerAuthSocketHandlers({ socket, authService }) {
    * @param {RegisterAckResponse} callback - Ack callback
    */
   socket.on('register', async (data, callback) => {
-    const { username, password, keyBundle, aboutme, profilePicture } = data;
+    const payload = data && typeof data === 'object' ? data : {};
+    const { username, password, keyBundle, aboutme, profilePicture } = payload;
+    if (!keyBundle || typeof keyBundle !== 'object') {
+      if (typeof callback === 'function') {
+        callback({ success: false, error: 'Missing required fields' });
+      }
+      return;
+    }
     const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey, oneTimePreKeys } = keyBundle;
 
     console.log('Received register:', data);
@@ -90,15 +97,19 @@ function registerAuthSocketHandlers({ socket, authService }) {
    * @param {LoginAckResponse} callback - Ack callback
    */
   socket.on('login', async (data, callback) => {
-    const { username, password } = data;
-    console.log('Received login:', data);
+    const safeAck = (payload) => {
+      if (typeof callback === 'function') callback(payload);
+    };
+    const payload = data && typeof data === 'object' ? data : {};
+    const { username, password } = payload;
+    console.log('Received login:', payload);
 
     try {
       const result = await authService.login({ username, password });
-      callback(result);
+      safeAck(result);
     } catch (err) {
       console.error('Error during login:', err);
-      callback({ success: false, error: 'Login failed' });
+      safeAck({ success: false, error: 'Login failed' });
     }
   });
 }

@@ -1,103 +1,144 @@
 /**
  * @module interfaces/http/routes/auth
- * Authentication REST endpoints
+ * Authentication HTTP endpoints.
  */
 
 const express = require('express');
-const { respondSocketOnly } = require('./socketOnlyResponse');
+const { validateBody, requireDatabase } = require('../middleware/validate');
+const { sendHttpError } = require('../errors/httpErrorResponse');
 
 /**
- * @typedef {object} RegisterRequest
- * @property {string} username - Account identifier
- * @property {string} password - Account password
- * @property {object} keyBundle - Signal Protocol keys
- * @property {string} [aboutme] - User bio
- * @property {string} [profilePicture] - Profile picture (base64)
+ * @param {object} deps
+ * @param {object} deps.authService - createAuthService() instance
+ * @param {*} deps.mongoose
+ * @param {import('express').RequestHandler} [deps.registerLimiter]
+ * @param {import('express').RequestHandler} [deps.loginLimiter]
+ * @returns {import('express').Router}
  */
+function createAuthRouter({ authService, mongoose, registerLimiter, loginLimiter } = {}) {
+  if (!authService) throw new Error('createAuthRouter requires authService');
+  if (!mongoose) throw new Error('createAuthRouter requires mongoose');
 
-/**
- * @typedef {object} RegisterResponse
- * @property {boolean} success
- * @property {string} [userId] - User ID if successful
- * @property {string} [error] - Error message if failed
- */
+  const router = express.Router();
+  const dbGuard = requireDatabase(mongoose);
 
-/**
- * @typedef {object} LoginRequest
- * @property {string} username - Username
- * @property {string} password - Password
- */
+  const registerLimit = typeof registerLimiter === 'function' ? registerLimiter : (_req, _res, next) => next();
+  const loginLimit = typeof loginLimiter === 'function' ? loginLimiter : (_req, _res, next) => next();
 
-/**
- * @typedef {object} LoginResponse
- * @property {boolean} success
- * @property {string} [token] - JWT token if successful
- * @property {string} [userId] - User ID if successful
- * @property {string} [error] - Error message if failed
- */
+  /**
+   * @openapi
+   * /auth/register:
+   *   post:
+   *     tags: [Authentication]
+   *     summary: Create a new user account
+   *     description: Registers a user with a Signal Protocol key bundle.
+   *     security: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/RegisterRequest'
+   *     responses:
+   *       201:
+   *         description: Account created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/RegisterResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       409: { $ref: '#/components/responses/ConflictResponse' }
+   *       429: { $ref: '#/components/responses/RateLimitedResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/auth/register',
+    registerLimit,
+    dbGuard,
+    validateBody([
+      { field: 'username', type: 'string' },
+      { field: 'password', type: 'string' },
+      { field: 'keyBundle', type: 'object' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const { username, password, keyBundle, aboutme, profilePicture } = req.body;
+        const { userId } = await authService.register({
+          username,
+          password,
+          keyBundle,
+          aboutme,
+          profilePicture,
+        });
+        return res.status(201).json({ success: true, userId });
+      } catch (err) {
+        if (err?.code === 11000 && err?.keyPattern?.username) {
+          return sendHttpError(res, 409, 'Username already taken', 'username_conflict');
+        }
+        if (err?.status) {
+          return sendHttpError(res, err.status, err.message, err.code, err.details);
+        }
+        return next(err);
+      }
+    }
+  );
 
-const authRouter = express.Router();
+  /**
+   * @openapi
+   * /auth/login:
+   *   post:
+   *     tags: [Authentication]
+   *     summary: Authenticate user and obtain a JWT
+   *     security: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/LoginRequest'
+   *     responses:
+   *       200:
+   *         description: Authentication successful
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/LoginResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       429: { $ref: '#/components/responses/RateLimitedResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/auth/login',
+    loginLimit,
+    dbGuard,
+    validateBody([
+      { field: 'username', type: 'string' },
+      { field: 'password', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const { username, password } = req.body;
+        const result = await authService.login({ username, password });
+        if (!result || result.success === false) {
+          return sendHttpError(
+            res,
+            401,
+            result?.error || 'Invalid username or password',
+            'invalid_credentials'
+          );
+        }
+        return res.json({ success: true, token: result.token, userId: result.userId });
+      } catch (err) {
+        if (err?.status) {
+          return sendHttpError(res, err.status, err.message, err.code, err.details);
+        }
+        return next(err);
+      }
+    }
+  );
 
-/**
- * @openapi
- * /auth/register:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Register a new user account
- *     description: Create a new user with Signal Protocol key bundle
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/RegisterRequest'
- *     responses:
- *       200:
- *         description: Registration successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/RegisterResponse'
- *       400:
- *         description: Invalid request
- *       409:
- *         description: Username already taken
- *       500:
- *         description: Server error
- */
-authRouter.post('/auth/register', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  return router;
+}
 
-/**
- * @openapi
- * /auth/login:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Authenticate user and get JWT token
- *     description: Login with username and password to receive authentication token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/LoginRequest'
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/LoginResponse'
- *       401:
- *         description: Invalid credentials
- *       500:
- *         description: Server error
- */
-authRouter.post('/auth/login', async (req, res) => {
-  return respondSocketOnly(res);
-});
-
-module.exports = { authRouter };
+module.exports = { createAuthRouter };
