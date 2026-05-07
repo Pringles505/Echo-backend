@@ -5,6 +5,7 @@
  */
 
 const express = require('express');
+const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
@@ -12,7 +13,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
-const { loadEnv } = require('./src/config/loadEnv');
+const { loadEnv, validateRuntimeEnv } = require('./src/config/loadEnv');
 const { connectMongo } = require('./src/infrastructure/persistence/mongoose/connect');
 const {
   createModels,
@@ -20,19 +21,29 @@ const {
 } = require('./src/infrastructure/persistence/mongoose/models');
 const { createAuthService } = require('./src/modules/auth/application/authService');
 const { createCallEventService } = require('./src/modules/calls/application/callEventService');
+const { createKeysService } = require('./src/modules/keys/application/keysService');
 const { createSequenceService } = require('./src/interfaces/socket/context/sequences');
 const { createOpkLimiterService } = require('./src/interfaces/socket/context/opkLimiter');
 const { saveProfilePicture } = require('./src/interfaces/socket/context/profilePictureStorage');
+const { createSocketNotifier } = require('./src/interfaces/socket/notifier');
 const { registerSocketHandlers } = require('./src/interfaces/socket/registerSocketHandlers');
 const { healthRouter } = require('./src/interfaces/http/routes/health.route');
-const { authRouter } = require('./src/interfaces/http/routes/auth.route');
-const { messagesRouter } = require('./src/interfaces/http/routes/messages.route');
-const { usersRouter } = require('./src/interfaces/http/routes/users.route');
-const { contactsRouter } = require('./src/interfaces/http/routes/contacts.route');
-const { groupsRouter } = require('./src/interfaces/http/routes/groups.route');
-const { callsRouter } = require('./src/interfaces/http/routes/calls.route');
-const { keysRouter } = require('./src/interfaces/http/routes/keys.route');
+const { createAuthRouter } = require('./src/interfaces/http/routes/auth.route');
+const messagesRouteModule = require('./src/interfaces/http/routes/messages.route');
+const usersRouteModule = require('./src/interfaces/http/routes/users.route');
+const contactsRouteModule = require('./src/interfaces/http/routes/contacts.route');
+const groupsRouteModule = require('./src/interfaces/http/routes/groups.route');
+const callsRouteModule = require('./src/interfaces/http/routes/calls.route');
+const keysRouteModule = require('./src/interfaces/http/routes/keys.route');
 const { setupSwagger } = require('./src/interfaces/http/swagger');
+const { createAuthMiddleware } = require('./src/interfaces/http/middleware/auth');
+const { notFoundHandler, errorHandler } = require('./src/interfaces/http/middleware/errorHandlers');
+const {
+  loginLimiter,
+  registerLimiter,
+  searchLimiter,
+  keyBundleLimiter,
+} = require('./src/interfaces/http/middleware/rateLimit');
 const {
   OPK_MAX_STORED,
   OPK_UPLOAD_MAX,
@@ -44,6 +55,8 @@ const {
 } = require('./opkPolicy');
 const {
   CORS_ORIGINS,
+  API_VERSION_PREFIX,
+  API_VERSION_HEADER_VALUE,
   JSON_LIMIT,
   PORT,
   SOCKET_PING_INTERVAL,
@@ -51,6 +64,7 @@ const {
 } = require('./src/shared/constants');
 
 loadEnv();
+validateRuntimeEnv();
 
 const userSocketMap = {};
 
@@ -66,6 +80,10 @@ const io = socketIo(server, {
   pingTimeout: SOCKET_PING_TIMEOUT,
 });
 
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(cors({
   origin: CORS_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -74,19 +92,13 @@ app.use(cors({
 }));
 app.use(express.json({ limit: JSON_LIMIT }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use(healthRouter);
-app.use(authRouter);
-app.use(messagesRouter);
-app.use(usersRouter);
-app.use(contactsRouter);
-app.use(groupsRouter);
-app.use(callsRouter);
-app.use(keysRouter);
-setupSwagger(app);
 
-connectMongo(mongoose).catch((err) => {
-  console.error('Error connecting to MongoDB', err);
-});
+const mongoConnectionPromise = connectMongo(mongoose);
+if (require.main !== module) {
+  mongoConnectionPromise.catch((err) => {
+    console.error('Error connecting to MongoDB', err);
+  });
+}
 
 const {
   Message,
@@ -111,6 +123,113 @@ const authService = createAuthService({
 const sequenceService = createSequenceService({ Message, MessageSequence, GroupSequence });
 const callEventService = createCallEventService({ io, userSocketMap, Call, Message, User });
 const opkLimiter = createOpkLimiterService(OpkRequestLog);
+const notifier = createSocketNotifier({ io, userSocketMap });
+const { requireAuth, optionalAuth } = createAuthMiddleware({ jwt });
+
+const opkPolicyDeps = {
+  OPK_MAX_STORED,
+  OPK_UPLOAD_MAX,
+  normalizeOneTimePreKeysPayload,
+  computeOpkReplenishNeeded,
+  dedupeIncomingOpks,
+  capToRemainingCapacity,
+  estimateOpkCountAfterConsume,
+};
+
+const keysService = createKeysService({
+  User,
+  opkPolicy: opkPolicyDeps,
+  opkLimiter,
+  notifier,
+});
+
+const httpDeps = {
+  mongoose,
+  jwt,
+  bcrypt,
+  io,
+  userSocketMap,
+  notifier,
+  requireAuth,
+  optionalAuth,
+  searchLimiter,
+  keyBundleLimiter,
+  keysService,
+  models: {
+    Message,
+    User,
+    MessageSequence,
+    OpkRequestLog,
+    Call,
+    Group,
+    GroupMember,
+    GroupSequence,
+    KeyPackage,
+  },
+  services: {
+    authService,
+    sequenceService,
+    callEventService,
+    saveProfilePicture,
+  },
+  opkPolicy: opkPolicyDeps,
+  rateLimit: {
+    loginLimiter,
+    registerLimiter,
+    searchLimiter,
+    keyBundleLimiter,
+  },
+};
+
+function pickRouter(mod, factoryName, legacyName, factoryDeps = httpDeps) {
+  if (typeof mod[factoryName] === 'function') {
+    return mod[factoryName](factoryDeps);
+  }
+  if (mod[legacyName]) return mod[legacyName];
+  throw new Error(`Route module is missing both ${factoryName}() and ${legacyName}`);
+}
+
+const authRouter = createAuthRouter({
+  authService,
+  mongoose,
+  registerLimiter,
+  loginLimiter,
+});
+
+const messagesRouter = pickRouter(messagesRouteModule, 'createMessagesRouter', 'messagesRouter');
+const usersRouter = pickRouter(usersRouteModule, 'createUsersRouter', 'usersRouter');
+const contactsRouter = pickRouter(contactsRouteModule, 'createContactsRouter', 'contactsRouter');
+const groupsRouter = pickRouter(groupsRouteModule, 'createGroupsRouter', 'groupsRouter');
+const callsRouter = pickRouter(callsRouteModule, 'createCallsRouter', 'callsRouter');
+const keysRouter = pickRouter(keysRouteModule, 'createKeysRouter', 'keysRouter');
+
+const mountHttpRoutes = (target) => {
+  target.use(healthRouter);
+  target.use(authRouter);
+  target.use(messagesRouter);
+  target.use(usersRouter);
+  target.use(contactsRouter);
+  target.use(groupsRouter);
+  target.use(callsRouter);
+  target.use(keysRouter);
+};
+
+mountHttpRoutes(app);
+
+const apiV1Router = express.Router();
+apiV1Router.use((_req, res, next) => {
+  res.setHeader('X-API-Version', API_VERSION_HEADER_VALUE);
+  next();
+});
+mountHttpRoutes(apiV1Router);
+app.use(API_VERSION_PREFIX, apiV1Router);
+
+setupSwagger(app, {
+  basePath: API_VERSION_PREFIX,
+  includeLegacy: true,
+});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 if (mongoose.connection.readyState === 1) {
   void syncKeyPackageIndexes(KeyPackage);
@@ -123,12 +242,15 @@ if (mongoose.connection.readyState === 1) {
 const authenticate = (socket, next) => {
   const token = socket.handshake?.auth?.token;
   if (!token) {
-    console.warn('No token provided, allowing unauthenticated access for login/register');
     socket.user = null;
     return next();
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+  if (typeof token !== 'string' || token.trim().length === 0) {
+    return next(new Error('unauthorized'));
+  }
+
+  jwt.verify(token.trim(), process.env.JWT_SECRET, (err, decoded) => {
     if (err) return next(new Error('unauthorized'));
     if (!decoded?.id) return next(new Error('unauthorized'));
 
@@ -141,7 +263,9 @@ const authenticate = (socket, next) => {
 io.use(authenticate);
 
 io.on('connection', (socket) => {
-  console.log(`A user connected with socket ID: ${socket.id}`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('Socket client connected');
+  }
 
   registerSocketHandlers({
     socket,
@@ -181,9 +305,16 @@ io.on('connection', (socket) => {
 });
 
 if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log(`listening on *:${PORT}`);
-  });
+  mongoConnectionPromise
+    .then(() => {
+      server.listen(PORT, () => {
+        console.log(`listening on *:${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error('Error connecting to MongoDB', err);
+      process.exitCode = 1;
+    });
 }
 
 module.exports = {

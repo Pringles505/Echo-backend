@@ -50,6 +50,12 @@ const CORS_ORIGINS = [
 /** Default server port */
 const PORT = process.env.PORT || 3001;
 
+/** Versioned API root prefix */
+const API_VERSION_PREFIX = '/api/v1';
+
+/** API version header value */
+const API_VERSION_HEADER_VALUE = 'v1';
+
 // ============================================================================
 // Socket.IO Configuration
 // ============================================================================
@@ -68,10 +74,10 @@ const SOCKET_PING_TIMEOUT = 60_000;
 // ============================================================================
 
 /** JSON body size limit for HTTP requests */
-const JSON_LIMIT = '50mb';
+const JSON_LIMIT = '15mb';
 
 /** Text body size limit for HTTP requests */
-const TEXT_LIMIT = '50mb';
+const TEXT_LIMIT = '15mb';
 
 // ============================================================================
 // File Upload Configuration
@@ -169,6 +175,8 @@ module.exports = {
   // CORS & Network
   CORS_ORIGINS,
   PORT,
+  API_VERSION_PREFIX,
+  API_VERSION_HEADER_VALUE,
 
   // Socket.IO
   PUBLIC_SOCKET_EVENTS,
