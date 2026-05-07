@@ -119,6 +119,53 @@ npm start
 
 ---
 
+## HTTP REST API
+
+All 27 documented endpoints are now functional REST routes (previously they returned `501 socket_only_endpoint`). They share semantics and validation with the equivalent Socket.IO events; clients can pick either transport.
+
+### Surface
+
+| Tag | Endpoints |
+|---|---|
+| Authentication | `POST /auth/register`, `POST /auth/login` |
+| Users | `POST /users/search`, `GET /users/:userId`, `PUT /users/profile/update`, `GET /users/online`, `DELETE /users/account/delete` |
+| Contacts | `POST /contacts/add-friend`, `POST /contacts/remove-friend` |
+| Messages | `POST /messages/check`, `POST /messages/latest-number`, `POST /messages/mark-seen` |
+| Groups | `POST /groups/create`, `GET /groups/list`, `GET /groups/:groupId`, `POST /groups/:groupId/add-member`, `POST /groups/:groupId/remove-member` |
+| Calls | `POST /calls/initiate`, `POST /calls/accept`, `POST /calls/decline`, `POST /calls/end`, `POST /calls/media-state` |
+| Keys | `POST /keys/signed-prekey`, `POST /keys/identity/x25519`, `POST /keys/identity/ed25519`, `POST /keys/bundle`, `POST /keys/opk/upload`, `GET /keys/opk/status` |
+
+### Authentication
+
+`POST /auth/register` and `POST /auth/login` are public. Every other endpoint requires `Authorization: Bearer <jwt>` where `<jwt>` is the token returned by `/auth/login`.
+
+The middleware lives in `src/interfaces/http/middleware/auth.js` (`createAuthMiddleware({ jwt })`). It mirrors the Socket.IO `authenticate` flow (same `JWT_SECRET`, same expected payload `{ id, username }`).
+
+### Realtime side-effects from REST
+
+REST handlers can still emit Socket.IO events to connected clients (e.g. `messageSeenUpdate`, `friendAdded`, `incomingCall`) through the `socketNotifier` adapter (`src/interfaces/socket/notifier.js`). The notifier is injected into every application service so services stay framework-agnostic.
+
+### Error contract
+
+All error responses are JSON of the shape:
+
+```json
+{ "success": false, "error": "...", "code": "...", "details": "..." }
+```
+
+Errors are produced by typed exceptions in `src/shared/errors.js` (`BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `RateLimitError`). Application services throw these and routers translate them via `sendHttpError`.
+
+### Smoke testing
+
+`scripts/smoke.sh` exercises all endpoints against a running server. It registers two users, drives the full surface, and tears down. Returns non-zero on any unexpected status.
+
+```bash
+npm start &       # boot against your .env (Atlas or local)
+bash scripts/smoke.sh
+```
+
+---
+
 ## Adding New HTTP Endpoints
 
 ### Step 1: Create Route File
