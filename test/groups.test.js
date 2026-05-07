@@ -16,9 +16,13 @@ if (process.env.MONGO_URI_TEST) {
   process.env.MONGO_URI = process.env.MONGO_URI_TEST;
 }
 
+if (!process.env.MONGO_URI && process.env.MONGO_URI_SECRET) {
+  process.env.MONGO_URI = process.env.MONGO_URI_SECRET;
+}
+
 if (!process.env.MONGO_URI) {
   throw new Error(
-    "Missing MONGO_URI. Set MONGO_URI_TEST (recommended) or MONGO_URI before running tests."
+    "Missing MONGO_URI. Set MONGO_URI_TEST (recommended), MONGO_URI, or MONGO_URI_SECRET before running tests."
   );
 }
 

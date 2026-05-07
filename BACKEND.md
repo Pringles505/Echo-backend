@@ -90,9 +90,15 @@ NODE_ENV=development
 PORT=3001
 ```
 
+Notes:
+- `MONGO_URI` is the primary runtime variable.
+- `MONGO_URI_SECRET` is supported as a fallback when `MONGO_URI` is missing.
+- Runtime (non-test) fails fast if `JWT_SECRET` is missing.
+
 For tests, optionally create `.env.test`:
 ```env
 MONGO_URI_TEST=mongodb://localhost:27017/echo-test
+JWT_SECRET=test-secret
 ```
 
 ### 3. Install & Run
@@ -103,9 +109,13 @@ npm start
 ```
 
 ### 4. View API Docs
-- **Swagger UI**: http://localhost:3001/docs
-- **OpenAPI JSON**: http://localhost:3001/docs/openapi.json
-- **Health Check**: GET http://localhost:3001/health
+- **Swagger UI (versioned)**: http://localhost:3001/api/v1/docs
+- **OpenAPI JSON (versioned)**: http://localhost:3001/api/v1/docs/openapi.json
+- **Health Check (versioned)**: GET http://localhost:3001/api/v1/health
+- **Legacy aliases (temporary compatibility)**:
+  - http://localhost:3001/docs
+  - http://localhost:3001/docs/openapi.json
+  - GET http://localhost:3001/health
 
 ---
 

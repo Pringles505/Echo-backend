@@ -32,7 +32,7 @@ function registerSocketHandlers(deps) {
 
     if (PUBLIC_EVENTS.has(eventName)) return next();
     if (!socket.user?.id) {
-      if (ack) ack({ success: false, error: 'unauthorized' });
+      if (ack) ack({ success: false, error: 'unauthorized', code: 'unauthorized' });
       return next(new Error('unauthorized'));
     }
     return next();
