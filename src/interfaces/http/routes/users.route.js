@@ -1,187 +1,283 @@
 /**
  * @module interfaces/http/routes/users
- * User profile and contact management REST endpoints
+ * User profile and account REST endpoints.
+ *
+ * Mirrors the contactsAccount/presence socket handlers as functional REST
+ * routes backed by `userProfileService`. Authentication is enforced by the
+ * shared `requireAuth` middleware; rate limits and DB readiness are layered
+ * with the same primitives as the auth router.
  */
 
 const express = require('express');
-const { respondSocketOnly } = require('./socketOnlyResponse');
+const { validateBody, requireDatabase } = require('../middleware/validate');
+const { sendHttpError } = require('../errors/httpErrorResponse');
+const {
+  createUserProfileService,
+} = require('../../../modules/users/application/userProfileService');
 
 /**
- * @typedef {object} SearchUserRequest
- * @property {string} searchTerm - Username to search for
+ * @param {object} deps
+ * @param {object} [deps.userProfileService] - Pre-built service. When omitted,
+ *   the router constructs one from `models.User`, `models.Message`, `bcrypt`,
+ *   `services.saveProfilePicture`, and `notifier` so the composition root
+ *   (server.js) can pass its `httpDeps` blob unchanged.
+ * @param {*} deps.mongoose
+ * @param {import('express').RequestHandler} deps.requireAuth
+ * @param {import('express').RequestHandler} [deps.searchLimiter]
+ * @param {{ listOnlineUserIds: () => string[], emitToUser?: function }} [deps.notifier]
+ * @param {{ User: any, Message?: any }} [deps.models]
+ * @param {{ saveProfilePicture?: function }} [deps.services]
+ * @param {*} [deps.bcrypt]
+ * @param {{ searchLimiter?: import('express').RequestHandler }} [deps.rateLimit]
+ * @returns {import('express').Router}
  */
+function createUsersRouter(deps = {}) {
+  const {
+    mongoose,
+    requireAuth,
+    notifier,
+    models = {},
+    services = {},
+    bcrypt,
+    rateLimit = {},
+  } = deps;
 
-/**
- * @typedef {object} UserProfile
- * @property {string} id - User ID
- * @property {string} username - Username
- * @property {string} [aboutme] - User bio
- * @property {string} [profilePicture] - Profile picture URL
- */
+  const userProfileService = deps.userProfileService || createUserProfileService({
+    User: models.User,
+    Message: models.Message,
+    bcrypt,
+    saveProfilePicture: services.saveProfilePicture,
+    notifier,
+  });
 
-/**
- * @typedef {object} UserResponse
- * @property {boolean} success
- * @property {UserProfile} [user] - User info if found
- * @property {string} [error] - Error message if failed
- */
+  const searchLimiter = deps.searchLimiter || rateLimit.searchLimiter;
 
-/**
- * @typedef {object} UpdateUserRequest
- * @property {string} [username] - New username
- * @property {string} [aboutme] - New bio
- * @property {string} [profilePicture] - New profile picture (base64 data URL)
- * @property {string} [oldPassword] - Old password for verification
- * @property {string} [newPassword] - New password (requires oldPassword)
- */
+  if (!mongoose) throw new Error('createUsersRouter requires mongoose');
+  if (typeof requireAuth !== 'function') {
+    throw new Error('createUsersRouter requires requireAuth middleware');
+  }
 
-/**
- * @typedef {object} OnlineUsersResponse
- * @property {boolean} success
- * @property {Array<string>} [onlineUsers] - List of online user IDs
- * @property {string} [error] - Error message if failed
- */
+  const router = express.Router();
+  const dbGuard = requireDatabase(mongoose);
+  const searchLimit = typeof searchLimiter === 'function'
+    ? searchLimiter
+    : (_req, _res, next) => next();
 
-const usersRouter = express.Router();
+  function handleServiceError(res, next, err) {
+    if (err && err.status) {
+      return sendHttpError(res, err.status, err.message, err.code, err.details);
+    }
+    return next(err);
+  }
 
-/**
- * @openapi
- * /users/search:
- *   post:
- *     tags:
- *       - Users
- *     summary: Search for a user by username
- *     description: Find a user by username
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/SearchUserRequest'
- *     responses:
- *       200:
- *         description: Search result
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/UserResponse'
- *       404:
- *         description: User not found
- *       500:
- *         description: Server error
- */
-usersRouter.post('/users/search', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  /**
+   * @openapi
+   * /users/search:
+   *   post:
+   *     tags: [Users]
+   *     summary: Search for a user by exact username
+   *     description: Returns minimal public information for the matching account.
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/SearchUserRequest'
+   *     responses:
+   *       200:
+   *         description: Match found
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/UserResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       429: { $ref: '#/components/responses/RateLimitedResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/users/search',
+    searchLimit,
+    requireAuth,
+    dbGuard,
+    validateBody([
+      { field: 'searchTerm', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const { searchTerm } = req.body;
+        const user = await userProfileService.searchUser({ searchTerm });
+        return res.json({ success: true, user });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
 
-/**
- * @openapi
- * /users/{userId}:
- *   get:
- *     tags:
- *       - Users
- *     summary: Get user information
- *     description: Fetch user profile information by user ID
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: User ID
- *     responses:
- *       200:
- *         description: User info
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/UserResponse'
- *       404:
- *         description: User not found
- *       500:
- *         description: Server error
- */
-usersRouter.get('/users/:userId', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  /**
+   * @openapi
+   * /users/online:
+   *   get:
+   *     tags: [Users]
+   *     summary: List currently online user IDs
+   *     description: Snapshot of users currently connected over Socket.IO.
+   *     responses:
+   *       200:
+   *         description: Online users snapshot
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/OnlineUsersResponse'
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   */
+  router.get(
+    '/users/online',
+    requireAuth,
+    (_req, res) => {
+      const onlineUsers = userProfileService.listOnlineUserIds();
+      return res.json({ success: true, onlineUsers });
+    }
+  );
 
-/**
- * @openapi
- * /users/profile/update:
- *   put:
- *     tags:
- *       - Users
- *     summary: Update authenticated user profile
- *     description: Update current user's profile information and password
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/UpdateUserRequest'
- *     responses:
- *       200:
- *         description: Profile updated
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/UserResponse'
- *       401:
- *         description: Unauthorized or invalid password
- *       500:
- *         description: Server error
- */
-usersRouter.put('/users/profile/update', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  /**
+   * @openapi
+   * /users/profile/update:
+   *   put:
+   *     tags: [Users]
+   *     summary: Update authenticated user's profile and account
+   *     description: |
+   *       Updates one or more of: username, aboutme, profilePicture, password.
+   *       Changing the password requires both `oldPassword` and `newPassword`.
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/UpdateUserRequest'
+   *     responses:
+   *       200:
+   *         description: Profile updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/UserResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       409: { $ref: '#/components/responses/ConflictResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.put(
+    '/users/profile/update',
+    requireAuth,
+    dbGuard,
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const user = await userProfileService.updateProfile({
+          userId,
+          changes: req.body || {},
+        });
+        return res.json({ success: true, user });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
 
-/**
- * @openapi
- * /users/online:
- *   get:
- *     tags:
- *       - Users
- *     summary: Get list of online users
- *     description: Retrieve list of currently online users
- *     responses:
- *       200:
- *         description: Online users list
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/OnlineUsersResponse'
- *       500:
- *         description: Server error
- */
-usersRouter.get('/users/online', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  /**
+   * @openapi
+   * /users/account/delete:
+   *   delete:
+   *     tags: [Users]
+   *     summary: Delete authenticated user account
+   *     description: |
+   *       Permanently deletes the authenticated account and its messages.
+   *       Requires the current password in the request body for proof of
+   *       knowledge (mitigation for SEC-002).
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/DeleteAccountRequest'
+   *     responses:
+   *       200:
+   *         description: Account deleted
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/SuccessResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.delete(
+    '/users/account/delete',
+    requireAuth,
+    dbGuard,
+    validateBody([
+      { field: 'password', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { password } = req.body;
+        await userProfileService.deleteAccount({ userId, password });
+        return res.json({ success: true });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
 
-/**
- * @openapi
- * /users/account/delete:
- *   delete:
- *     tags:
- *       - Users
- *     summary: Delete user account
- *     description: Permanently delete the authenticated user account
- *     responses:
- *       200:
- *         description: Account deleted
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
-usersRouter.delete('/users/account/delete', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  /**
+   * @openapi
+   * /users/{userId}:
+   *   get:
+   *     tags: [Users]
+   *     summary: Fetch user profile by id
+   *     description: Returns the public profile (username, aboutme, profilePicture, friends) for `userId`.
+   *     parameters:
+   *       - in: path
+   *         name: userId
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Public user identifier (5-char nanoid).
+   *     responses:
+   *       200:
+   *         description: User found
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/UserResponse'
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.get(
+    '/users/:userId',
+    requireAuth,
+    dbGuard,
+    async (req, res, next) => {
+      try {
+        const { userId } = req.params;
+        const user = await userProfileService.getUserById({ userId });
+        return res.json({ success: true, user });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
 
-module.exports = { usersRouter };
+  // notifier kept in deps signature for parity / future endpoints; reference
+  // it here so linters don't flag it as unused even when not directly called.
+  void notifier;
+
+  return router;
+}
+
+module.exports = { createUsersRouter };

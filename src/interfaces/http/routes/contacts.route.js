@@ -1,82 +1,141 @@
 /**
  * @module interfaces/http/routes/contacts
- * Friend and contact management REST endpoints
+ * Friend / contact management REST endpoints.
+ *
+ * Backed by `contactsService`. The OpenAPI `FriendRequest` schema uses
+ * `friendId` (NOT `targetUserId`) — that is the canonical request field.
  */
 
 const express = require('express');
-const { respondSocketOnly } = require('./socketOnlyResponse');
+const { validateBody, requireDatabase } = require('../middleware/validate');
+const { sendHttpError } = require('../errors/httpErrorResponse');
+const {
+  createContactsService,
+} = require('../../../modules/contacts/application/contactsService');
 
 /**
- * @typedef {object} FriendRequest
- * @property {string} friendId - User ID to add/remove
+ * @param {object} deps
+ * @param {object} [deps.contactsService] - Pre-built service. When omitted, a
+ *   default one is built from `models.User` + `notifier` so server.js can pass
+ *   its `httpDeps` blob unchanged.
+ * @param {*} deps.mongoose
+ * @param {import('express').RequestHandler} deps.requireAuth
+ * @param {{ emitToUser?: function }} [deps.notifier]
+ * @param {{ User: any }} [deps.models]
+ * @returns {import('express').Router}
  */
+function createContactsRouter(deps = {}) {
+  const { mongoose, requireAuth, notifier, models = {} } = deps;
 
-/**
- * @typedef {object} ContactResponse
- * @property {boolean} success
- * @property {string} [error] - Error message if failed
- */
+  const contactsService = deps.contactsService || createContactsService({
+    User: models.User,
+    notifier,
+  });
 
-const contactsRouter = express.Router();
+  if (!mongoose) throw new Error('createContactsRouter requires mongoose');
+  if (typeof requireAuth !== 'function') {
+    throw new Error('createContactsRouter requires requireAuth middleware');
+  }
 
-/**
- * @openapi
- * /contacts/add-friend:
- *   post:
- *     tags:
- *       - Contacts
- *     summary: Add a friend
- *     description: Add a user to your friends list
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/FriendRequest'
- *     responses:
- *       200:
- *         description: Friend added
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ContactResponse'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
-contactsRouter.post('/contacts/add-friend', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  const router = express.Router();
+  const dbGuard = requireDatabase(mongoose);
 
-/**
- * @openapi
- * /contacts/remove-friend:
- *   post:
- *     tags:
- *       - Contacts
- *     summary: Remove a friend
- *     description: Remove a user from your friends list
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/FriendRequest'
- *     responses:
- *       200:
- *         description: Friend removed
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ContactResponse'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
-contactsRouter.post('/contacts/remove-friend', async (req, res) => {
-  return respondSocketOnly(res);
-});
+  function handleServiceError(res, next, err) {
+    if (err && err.status) {
+      return sendHttpError(res, err.status, err.message, err.code, err.details);
+    }
+    return next(err);
+  }
 
-module.exports = { contactsRouter };
+  /**
+   * @openapi
+   * /contacts/add-friend:
+   *   post:
+   *     tags: [Contacts]
+   *     summary: Add a user to the authenticated user's friend list
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/FriendRequest'
+   *     responses:
+   *       200:
+   *         description: Friend added
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/SuccessResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       409: { $ref: '#/components/responses/ConflictResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/contacts/add-friend',
+    requireAuth,
+    dbGuard,
+    validateBody([
+      { field: 'friendId', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { friendId } = req.body;
+        await contactsService.addFriend({ userId, friendId });
+        return res.json({ success: true });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
+
+  /**
+   * @openapi
+   * /contacts/remove-friend:
+   *   post:
+   *     tags: [Contacts]
+   *     summary: Remove a user from the authenticated user's friend list
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/FriendRequest'
+   *     responses:
+   *       200:
+   *         description: Friend removed
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/SuccessResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       409: { $ref: '#/components/responses/ConflictResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/contacts/remove-friend',
+    requireAuth,
+    dbGuard,
+    validateBody([
+      { field: 'friendId', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { friendId } = req.body;
+        await contactsService.removeFriend({ userId, friendId });
+        return res.json({ success: true });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
+
+  return router;
+}
+
+module.exports = { createContactsRouter };
