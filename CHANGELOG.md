@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### 1.1.1 (2026-05-09)
+
+
+### Bug Fixes
+
+* add missing deps ([aeb4c47](https://github.com/echo-chat-protocol/echo-backend/commit/aeb4c470e818c1f4c15dcb98bed2ec5b88ef9221))
+
 ## [1.1.0](https://github.com/echo-chat-protocol/echo-backend/compare/v1.0.1...v1.1.0) (2026-05-07)
 
 
