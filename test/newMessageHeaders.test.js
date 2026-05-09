@@ -17,9 +17,13 @@ if (process.env.MONGO_URI_TEST) {
   process.env.MONGO_URI = process.env.MONGO_URI_TEST;
 }
 
+if (!process.env.MONGO_URI && process.env.MONGO_URI_SECRET) {
+  process.env.MONGO_URI = process.env.MONGO_URI_SECRET;
+}
+
 if (!process.env.MONGO_URI) {
   throw new Error(
-    "Missing MONGO_URI. Set MONGO_URI_TEST (recommended) or MONGO_URI before running tests."
+    "Missing MONGO_URI. Set MONGO_URI_TEST (recommended), MONGO_URI, or MONGO_URI_SECRET before running tests."
   );
 }
 
@@ -28,7 +32,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret";
 
 const ioClient = require("socket.io-client");
 const jwt = require("jsonwebtoken");
-const { server, mongoose, Message, User } = require("../server");
+const { server, mongoose, Message, User, MessageSequence } = require("../server");
 
 async function waitForMongo() {
   if (mongoose.connection.readyState === 1) return;
@@ -42,9 +46,11 @@ test("newMessage persists sendingNumber and previousSendingNumber", async () => 
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
 
-  const userId = "TESTU1";
-  const targetUserId = "TESTU2";
+  const ts = Date.now();
+  const userId = `TESTU1-${ts}`;
+  const targetUserId = `TESTU2-${ts}`;
   const payload = `cipher-${Date.now()}`;
+  const conversationKey = [userId, targetUserId].sort().join("_");
 
   let client = null;
   try {
@@ -105,6 +111,7 @@ test("newMessage persists sendingNumber and previousSendingNumber", async () => 
   } finally {
     if (client) client.disconnect();
     await Message.deleteMany({ userId, targetUserId, payload });
+    await MessageSequence.deleteMany({ conversationKey });
     await User.deleteMany({ id: userId });
     await new Promise((resolve) => server.close(resolve));
     await mongoose.disconnect();

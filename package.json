@@ -1,10 +1,12 @@
 {
-  "name": "api",
-  "version": "1.0.0",
+  "name": "echo-backend",
+  "version": "1.1.0",
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "release": "standard-version",
+    "release:first": "standard-version --first-release"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +24,12 @@
     "shortuuid": "^0.1.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
     "uuid": "^11.0.3",
     "vite": "^5.4.11"
+  },
+  "devDependencies": {
+    "standard-version": "^9.5.0"
   }
 }
