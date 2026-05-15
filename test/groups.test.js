@@ -227,7 +227,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const welcomePayload = {
       groupId,
       epoch: 0,
-      cipherSuite: "MLS-MVP/X25519_AES256GCM_SHA256",
+      cipherSuite: "Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256",
       roster: [
         { userId: userA.id, username: userA.username, leafIndex: 0 },
         { userId: userB.id, username: userB.username, leafIndex: 1 },
@@ -277,12 +277,12 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
       name: mlsGroupName,
       memberIds: [userB.id],
       mlsEnabled: true,
-      cipherSuite: "MLS-MVP/X25519_AES256GCM_SHA256",
+      cipherSuite: "Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256",
     });
     assert.equal(createMlsAck?.success, true);
     assert.equal(createMlsAck?.group?.mlsEnabled, true);
     assert.equal(createMlsAck?.group?.epoch, 0);
-    assert.equal(createMlsAck?.group?.cipherSuite, "MLS-MVP/X25519_AES256GCM_SHA256");
+    assert.equal(createMlsAck?.group?.cipherSuite, "Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256");
 
     const mlsGroupId = String(createMlsAck.group.groupId);
     createdGroupIds.push(mlsGroupId);
@@ -314,7 +314,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const welcomePayloadMls = {
       groupId: mlsGroupId,
       epoch: 1,
-      cipherSuite: "MLS-MVP/X25519_AES256GCM_SHA256",
+      cipherSuite: "Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256",
       roster: explicitCommit.roster,
       recipientUserId: userD.id,
       recipientLeafIndex: 2,

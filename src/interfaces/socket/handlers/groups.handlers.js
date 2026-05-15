@@ -195,7 +195,7 @@ function registerGroupsSocketHandlers(deps) {
 
     const wantsMls = mlsEnabled === true;
     const normalizedCipherSuite = wantsMls
-      ? (typeof cipherSuite === 'string' && cipherSuite.trim().length > 0 ? cipherSuite.trim() : 'MLS-MVP/X25519_AES256GCM_SHA256')
+      ? (typeof cipherSuite === 'string' && cipherSuite.trim().length > 0 ? cipherSuite.trim() : 'Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256')
       : null;
 
     const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
@@ -390,6 +390,10 @@ function registerGroupsSocketHandlers(deps) {
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!callerMembership || callerMembership.role !== 'admin') return cb?.({ success: false, error: 'forbidden' });
 
+      // For MLS groups, membership DB changes are driven by confirmMlsCommit after the
+      // cryptographic commit has been distributed and applied. addGroupMember only
+      // pre-registers the member with status 'invited' so the server knows to deliver
+      // the Welcome; the status becomes 'active' via confirmMlsCommit.
       const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
       if (existing) return cb?.({ success: false, error: 'already_member' });
 
@@ -397,13 +401,15 @@ function registerGroupsSocketHandlers(deps) {
       const maxLeafIndex = existingMembers.reduce((max, member) => (Number.isInteger(member.leafIndex) && member.leafIndex > max ? member.leafIndex : max), -1);
       const nextLeafIndex = maxLeafIndex + 1;
 
+      const initialStatus = group.mlsEnabled ? 'invited' : 'active';
+
       await GroupMember.create({
         groupId: groupIdStr,
         userId: memberIdStr,
         role: 'member',
         joinedAt: new Date(),
         leafIndex: nextLeafIndex,
-        status: 'active',
+        status: initialStatus,
       });
 
       const nowIso = new Date().toISOString();
@@ -457,23 +463,36 @@ function registerGroupsSocketHandlers(deps) {
       const canRemove = isSelf || (callerMembership.role === 'admin' && (targetMembership.role !== 'admin' || isSelf));
       if (!canRemove) return cb?.({ success: false, error: 'forbidden' });
 
-      await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
-
       const room = `group:${groupIdStr}`;
       const nowIso = new Date().toISOString();
-      const memberSocketId = userSocketMap[memberIdStr];
-      if (memberSocketId) {
-        const memberSocket = io.sockets.sockets.get(memberSocketId);
-        if (memberSocket) memberSocket.leave(room);
-        io.to(memberSocketId).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
-      }
 
-      io.to(room).emit('groupMemberRemoved', {
-        groupId: groupIdStr,
-        memberId: memberIdStr,
-        removedByUserId: String(authedUserId),
-        at: nowIso,
-      });
+      if (group.mlsEnabled && !isSelf) {
+        // For MLS groups, the admin flow only pre-stages the removal. The actual DB
+        // mutation (status → 'removed') happens via confirmMlsCommit after the
+        // cryptographic remove commit has been applied by all members.
+        // Self-leave is allowed to complete immediately even in MLS groups.
+        io.to(room).emit('groupMemberRemoved', {
+          groupId: groupIdStr,
+          memberId: memberIdStr,
+          removedByUserId: String(authedUserId),
+          at: nowIso,
+        });
+      } else {
+        // Non-MLS groups or self-leave: complete immediately.
+        await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
+        const memberSocketId = userSocketMap[memberIdStr];
+        if (memberSocketId) {
+          const memberSocket = io.sockets.sockets.get(memberSocketId);
+          if (memberSocket) memberSocket.leave(room);
+          io.to(memberSocketId).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
+        }
+        io.to(room).emit('groupMemberRemoved', {
+          groupId: groupIdStr,
+          memberId: memberIdStr,
+          removedByUserId: String(authedUserId),
+          at: nowIso,
+        });
+      }
 
       cb?.({ success: true });
     } catch (err) {
@@ -503,6 +522,8 @@ function registerGroupsSocketHandlers(deps) {
       contentType,
       headerB64,
       ciphertextB64,
+      // Item #3: encrypted sender identity — preferred over plaintext headerB64
+      encryptedSenderDataB64,
       epoch,
       senderLeafIndex,
     } = data ?? {};
@@ -523,11 +544,14 @@ function registerGroupsSocketHandlers(deps) {
       const isMlsGroup = group.mlsEnabled === true;
       if (isMlsGroup) {
         const validContentTypes = new Set(['application', 'commit', 'welcome']);
+        // Item #3: accept either a plaintext headerB64 (legacy) or encryptedSenderDataB64
+        const hasFraming =
+          (typeof headerB64 === 'string' && headerB64.length > 0) ||
+          (typeof encryptedSenderDataB64 === 'string' && encryptedSenderDataB64.length > 0);
         if (
           typeof contentType !== 'string' ||
           !validContentTypes.has(contentType) ||
-          typeof headerB64 !== 'string' ||
-          headerB64.length === 0 ||
+          !hasFraming ||
           typeof ciphertextB64 !== 'string' ||
           ciphertextB64.length === 0 ||
           typeof epoch !== 'number' ||
@@ -570,8 +594,10 @@ function registerGroupsSocketHandlers(deps) {
         epoch: isMlsGroup ? epoch : null,
         senderLeafIndex: isMlsGroup ? senderLeafIndex : null,
         contentType: isMlsGroup ? contentType : null,
-        headerB64: isMlsGroup ? headerB64 : null,
+        headerB64: isMlsGroup ? (headerB64 ?? null) : null,
         ciphertextB64: isMlsGroup ? ciphertextB64 : null,
+        // Item #3: persist encrypted sender identity so receivers can use it
+        encryptedSenderDataB64: isMlsGroup ? (encryptedSenderDataB64 ?? null) : null,
       });
 
       await message.save();
@@ -586,6 +612,8 @@ function registerGroupsSocketHandlers(deps) {
         contentType: message.contentType,
         headerB64: message.headerB64,
         ciphertextB64: message.ciphertextB64,
+        // Item #3: forward encrypted sender identity to all recipients
+        encryptedSenderDataB64: message.encryptedSenderDataB64 ?? null,
       };
 
       io.to(room).emit('newGroupMessage', messageWithProfile);
@@ -712,6 +740,10 @@ function registerGroupsSocketHandlers(deps) {
       ) {
         return cb?.({ success: false, error: 'Forbidden' });
       }
+      // Item #17: reject commits that don't advance the epoch by exactly 1.
+      if (Number.isInteger(commit.epoch) && commit.epoch !== group.epoch + 1) {
+        return cb?.({ success: false, error: 'Invalid commit epoch' });
+      }
 
       await persistGroupArtifactMessage({
         groupId: groupIdStr,
@@ -743,45 +775,176 @@ function registerGroupsSocketHandlers(deps) {
     }
   });
 
-  socket.on('publishKeyPackage', async ({ initKeyB64 }, cb) => {
+  socket.on('publishKeyPackage', async ({ keyPackage, initKeyB64, clientId }, cb) => {
     const userId = String(socket.user?.id ?? '');
-    const normalizedInitKeyB64 = typeof initKeyB64 === 'string' ? initKeyB64.trim() : '';
     if (!userId) return cb?.({ success: false, error: 'unauthorized' });
-    if (!normalizedInitKeyB64) return cb?.({ success: false, error: 'Missing initKeyB64' });
+
+    // Item #20: clientId scopes the package to a specific device/session.
+    // null means "default client" for backward compatibility.
+    const resolvedClientId = typeof clientId === 'string' && clientId.length > 0 ? clientId : null;
 
     try {
-      await KeyPackage.findOneAndUpdate(
-        { userId },
-        { $set: { userId, initKeyB64: normalizedInitKeyB64, updatedAt: new Date() } },
-        {
-          upsert: true,
-          new: true,
-          runValidators: true,
-          setDefaultsOnInsert: true,
-        }
-      );
+      if (keyPackage && typeof keyPackage === 'object') {
+        const blob = JSON.stringify(keyPackage);
+        if (blob.length > 16384) return cb?.({ success: false, error: 'KeyPackage too large' });
+        const initKey = typeof keyPackage.initKeyB64 === 'string' ? keyPackage.initKeyB64 : null;
+        // Item #9 + #20: upsert by (userId, clientId) so each device has its own package;
+        // reset consumed=false so the refreshed package is eligible for new Add commits.
+        await KeyPackage.findOneAndUpdate(
+          { userId, clientId: resolvedClientId },
+          { $set: { userId, clientId: resolvedClientId, keyPackage, initKeyB64: initKey, consumed: false, updatedAt: new Date() } },
+          { upsert: true, new: true, runValidators: false, setDefaultsOnInsert: true }
+        );
+      } else if (typeof initKeyB64 === 'string' && initKeyB64.trim().length > 0) {
+        await KeyPackage.findOneAndUpdate(
+          { userId, clientId: resolvedClientId },
+          { $set: { userId, clientId: resolvedClientId, initKeyB64: initKeyB64.trim(), consumed: false, updatedAt: new Date() } },
+          { upsert: true, new: true, runValidators: false, setDefaultsOnInsert: true }
+        );
+      } else {
+        return cb?.({ success: false, error: 'Missing keyPackage or initKeyB64' });
+      }
       cb?.({ success: true });
     } catch (err) {
-      console.error('publishKeyPackage error:', {
-        userId,
-        initKeyLength: normalizedInitKeyB64.length,
-        message: err?.message,
-        code: err?.code,
-        stack: err?.stack,
-      });
+      console.error('publishKeyPackage error:', err?.message);
       cb?.({ success: false, error: err?.message || 'Internal server error' });
     }
   });
 
-  socket.on('fetchKeyPackage', async ({ userId: targetId }, cb) => {
+  socket.on('fetchKeyPackage', async ({ userId: targetId, consume }, cb) => {
     const callerId = socket.user?.id;
     if (!callerId) return cb?.({ success: false, error: 'unauthorized' });
     try {
-      const kp = await KeyPackage.findOne({ userId: String(targetId ?? '') }).lean();
+      const userIdStr = String(targetId ?? '');
+      // Item #9: prefer a non-consumed package; fall back to any package for backward compat.
+      // Sort by createdAt ascending so oldest packages are consumed first (FIFO pool).
+      let kp = await KeyPackage.findOne({ userId: userIdStr, consumed: false })
+        .sort({ createdAt: 1 })
+        .lean();
+      if (!kp) {
+        kp = await KeyPackage.findOne({ userId: userIdStr }).sort({ createdAt: 1 }).lean();
+      }
       if (!kp) return cb?.({ success: false, error: 'KeyPackage not found' });
-      cb?.({ success: true, initKeyB64: kp.initKeyB64 });
+
+      // Item #9: atomically mark as consumed when the caller signals it will be used
+      // for an Add commit (consume=true). This prevents KeyPackage reuse.
+      if (consume === true && !kp.consumed) {
+        await KeyPackage.updateOne({ _id: kp._id }, { $set: { consumed: true } });
+      }
+
+      if (kp.keyPackage) {
+        cb?.({ success: true, keyPackage: kp.keyPackage, initKeyB64: kp.initKeyB64 });
+      } else {
+        cb?.({ success: true, initKeyB64: kp.initKeyB64 });
+      }
     } catch (err) {
       console.error('fetchKeyPackage error:', err);
+      cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // Clients send a proposal before committing in MLS groups.
+  // Server stores it opaquely and broadcasts to all group members.
+  socket.on('sendGroupProposal', async ({ groupId, proposal }, cb) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
+
+    const groupIdStr = String(groupId ?? '');
+    if (!groupIdStr || !proposal || typeof proposal !== 'object') {
+      return cb?.({ success: false, error: 'Missing required fields' });
+    }
+
+    try {
+      const [group, membership, sender] = await Promise.all([
+        Group.findOne({ groupId: groupIdStr }).lean(),
+        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
+        User.findOne({ id: String(authedUserId) }).lean(),
+      ]);
+
+      if (!group) return cb?.({ success: false, error: 'Group not found' });
+      if (!membership) return cb?.({ success: false, error: 'forbidden' });
+      if (!sender) return cb?.({ success: false, error: 'Sender not found' });
+      if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
+      if (String(proposal.groupId ?? '') !== groupIdStr) {
+        return cb?.({ success: false, error: 'Proposal groupId mismatch' });
+      }
+
+      await persistGroupArtifactMessage({
+        groupId: groupIdStr,
+        senderUserId: String(authedUserId),
+        senderUsername: sender.username,
+        epoch: proposal.epoch,
+        senderLeafIndex: proposal.senderLeafIndex,
+        contentType: 'proposal',
+        artifact: proposal,
+      });
+
+      const delivered = await emitEventToGroupMembers({
+        groupId: groupIdStr,
+        eventName: 'groupProposal',
+        payload: { groupId: groupIdStr, proposal },
+      });
+
+      cb?.({ success: true, delivered });
+    } catch (err) {
+      console.error('Error sending group proposal:', err);
+      cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // Two-phase membership commit: the DB mutation happens only after the client has
+  // successfully applied the MLS commit locally and calls this event.
+  // This prevents the DB state from diverging from the cryptographic state.
+  socket.on('confirmMlsCommit', async ({ groupId, epoch, type, targetUserId }, cb) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
+
+    const groupIdStr = String(groupId ?? '');
+    const targetUserIdStr = String(targetUserId ?? '');
+
+    if (!groupIdStr || !type || !Number.isInteger(epoch)) {
+      return cb?.({ success: false, error: 'Missing required fields' });
+    }
+
+    try {
+      const [group, callerMembership] = await Promise.all([
+        Group.findOne({ groupId: groupIdStr }).lean(),
+        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
+      ]);
+
+      if (!group) return cb?.({ success: false, error: 'Group not found' });
+      if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
+      if (!callerMembership || callerMembership.role !== 'admin') {
+        return cb?.({ success: false, error: 'forbidden' });
+      }
+      if (group.epoch + 1 !== epoch) {
+        return cb?.({ success: false, error: 'Epoch mismatch — another commit may have won the race' });
+      }
+
+      if (type === 'add' && targetUserIdStr) {
+        await GroupMember.updateOne(
+          { groupId: groupIdStr, userId: targetUserIdStr },
+          { $set: { status: 'active' } }
+        );
+      } else if (type === 'remove' && targetUserIdStr) {
+        await GroupMember.updateOne(
+          { groupId: groupIdStr, userId: targetUserIdStr },
+          { $set: { status: 'removed' } }
+        );
+        const room = `group:${groupIdStr}`;
+        const nowIso = new Date().toISOString();
+        const memberSocketId = userSocketMap[targetUserIdStr];
+        if (memberSocketId) {
+          const memberSocket = io.sockets.sockets.get(memberSocketId);
+          if (memberSocket) memberSocket.leave(room);
+          io.to(memberSocketId).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
+        }
+      }
+
+      await Group.updateOne({ groupId: groupIdStr }, { $set: { epoch } });
+      cb?.({ success: true });
+    } catch (err) {
+      console.error('Error confirming MLS commit:', err);
       cb?.({ success: false, error: 'Internal server error' });
     }
   });

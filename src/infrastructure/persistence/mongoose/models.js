@@ -64,9 +64,11 @@ function createModels(mongoose) {
     seq: { type: Number, default: null, index: true, groupId: 1, seq: 1 },
     epoch: { type: Number, default: null },
     senderLeafIndex: { type: Number, default: null },
-    contentType: { type: String, enum: ['application', 'commit', 'welcome', null], default: null },
+    contentType: { type: String, enum: ['application', 'commit', 'welcome', 'proposal', null], default: null },
     headerB64: { type: String, default: null },
     ciphertextB64: { type: String, default: null },
+    // Item #3: encrypted sender identity blob — server cannot read leaf index from this
+    encryptedSenderDataB64: { type: String, default: null },
   });
 
   const messageSequenceSchema = new mongoose.Schema({
@@ -124,7 +126,7 @@ function createModels(mongoose) {
     joinedAt: { type: Date, default: Date.now },
     leafIndex: { type: Number, default: null },
     credential: { type: mongoose.Schema.Types.Mixed, default: null },
-    status: { type: String, enum: ['active', 'removed'], default: 'active' },
+    status: { type: String, enum: ['active', 'invited', 'removed'], default: 'active' },
   });
 
   const groupSequenceSchema = new mongoose.Schema({
@@ -134,10 +136,21 @@ function createModels(mongoose) {
   });
 
   const keyPackageSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
-    initKeyB64: { type: String, required: true },
+    // Item #20: userId is no longer unique alone — one record per (userId, clientId) pair
+    // so multiple devices can publish independent KeyPackages.
+    userId: { type: String, required: true, index: true },
+    // Item #20: opaque device/client identifier; null means "only device" (legacy compat).
+    clientId: { type: String, default: null },
+    // Full signed KeyPackage blob (replaces the raw initKeyB64 field).
+    keyPackage: { type: mongoose.Schema.Types.Mixed, default: null },
+    initKeyB64: { type: String, default: null },
+    // Item #9: pool lifecycle — once consumed for an Add commit the package is retired.
+    consumed: { type: Boolean, default: false, index: true },
+    createdAt: { type: Date, default: Date.now, index: true },
     updatedAt: { type: Date, default: Date.now },
   });
+  // Compound unique index: one active KeyPackage per (userId, clientId) pair.
+  keyPackageSchema.index({ userId: 1, clientId: 1 }, { unique: true });
 
   const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
   const User = mongoose.models.User || mongoose.model('User', userSchema);
