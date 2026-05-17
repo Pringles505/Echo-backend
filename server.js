@@ -25,6 +25,7 @@ const { createKeysService } = require('./src/modules/keys/application/keysServic
 const { createSequenceService } = require('./src/interfaces/socket/context/sequences');
 const { createOpkLimiterService } = require('./src/interfaces/socket/context/opkLimiter');
 const { saveProfilePicture } = require('./src/interfaces/socket/context/profilePictureStorage');
+const { saveBanner } = require('./src/interfaces/socket/context/bannerStorage');
 const { createSocketNotifier } = require('./src/interfaces/socket/notifier');
 const { registerSocketHandlers } = require('./src/interfaces/socket/registerSocketHandlers');
 const { healthRouter } = require('./src/interfaces/http/routes/health.route');
@@ -35,6 +36,11 @@ const contactsRouteModule = require('./src/interfaces/http/routes/contacts.route
 const groupsRouteModule = require('./src/interfaces/http/routes/groups.route');
 const callsRouteModule = require('./src/interfaces/http/routes/calls.route');
 const keysRouteModule = require('./src/interfaces/http/routes/keys.route');
+const communityRouteModule = require('./src/interfaces/http/routes/community.route');
+const blogRouteModule = require('./src/interfaces/http/routes/blog.route');
+const adminRouteModule = require('./src/interfaces/http/routes/admin.route');
+const contactRouteModule = require('./src/interfaces/http/routes/contact.route');
+const statusRouteModule = require('./src/interfaces/http/routes/status.route');
 const { setupSwagger } = require('./src/interfaces/http/swagger');
 const { createAuthMiddleware } = require('./src/interfaces/http/middleware/auth');
 const { notFoundHandler, errorHandler } = require('./src/interfaces/http/middleware/errorHandlers');
@@ -43,6 +49,12 @@ const {
   registerLimiter,
   searchLimiter,
   keyBundleLimiter,
+  refreshLimiter,
+  newsletterLimiter,
+  contactLimiter,
+  eventRegisterLimiter,
+  bannerLimiter,
+  statusLimiter,
 } = require('./src/interfaces/http/middleware/rateLimit');
 const {
   OPK_MAX_STORED,
@@ -110,10 +122,17 @@ const {
   GroupMember,
   GroupSequence,
   KeyPackage,
+  BlogPost,
+  Event,
+  EventRegistration,
+  NewsletterSubscriber,
+  SupportTicket,
+  RefreshToken,
 } = createModels(mongoose);
 
 const authService = createAuthService({
   User,
+  RefreshToken,
   bcrypt,
   jwt,
   normalizeOneTimePreKeysPayload,
@@ -124,7 +143,7 @@ const sequenceService = createSequenceService({ Message, MessageSequence, GroupS
 const callEventService = createCallEventService({ io, userSocketMap, Call, Message, User });
 const opkLimiter = createOpkLimiterService(OpkRequestLog);
 const notifier = createSocketNotifier({ io, userSocketMap });
-const { requireAuth, optionalAuth } = createAuthMiddleware({ jwt });
+const { requireAuth, optionalAuth, requireAdmin } = createAuthMiddleware({ jwt, User });
 
 const opkPolicyDeps = {
   OPK_MAX_STORED,
@@ -152,8 +171,11 @@ const httpDeps = {
   notifier,
   requireAuth,
   optionalAuth,
+  requireAdmin,
   searchLimiter,
   keyBundleLimiter,
+  bannerLimiter,
+  refreshLimiter,
   keysService,
   models: {
     Message,
@@ -165,12 +187,19 @@ const httpDeps = {
     GroupMember,
     GroupSequence,
     KeyPackage,
+    BlogPost,
+    Event,
+    EventRegistration,
+    NewsletterSubscriber,
+    SupportTicket,
+    RefreshToken,
   },
   services: {
     authService,
     sequenceService,
     callEventService,
     saveProfilePicture,
+    saveBanner,
   },
   opkPolicy: opkPolicyDeps,
   rateLimit: {
@@ -178,6 +207,12 @@ const httpDeps = {
     registerLimiter,
     searchLimiter,
     keyBundleLimiter,
+    refreshLimiter,
+    newsletterLimiter,
+    contactLimiter,
+    eventRegisterLimiter,
+    bannerLimiter,
+    statusLimiter,
   },
 };
 
@@ -192,8 +227,10 @@ function pickRouter(mod, factoryName, legacyName, factoryDeps = httpDeps) {
 const authRouter = createAuthRouter({
   authService,
   mongoose,
+  requireAuth,
   registerLimiter,
   loginLimiter,
+  refreshLimiter,
 });
 
 const messagesRouter = pickRouter(messagesRouteModule, 'createMessagesRouter', 'messagesRouter');
@@ -202,6 +239,11 @@ const contactsRouter = pickRouter(contactsRouteModule, 'createContactsRouter', '
 const groupsRouter = pickRouter(groupsRouteModule, 'createGroupsRouter', 'groupsRouter');
 const callsRouter = pickRouter(callsRouteModule, 'createCallsRouter', 'callsRouter');
 const keysRouter = pickRouter(keysRouteModule, 'createKeysRouter', 'keysRouter');
+const communityRouter = pickRouter(communityRouteModule, 'createCommunityRouter', 'communityRouter');
+const blogRouter = pickRouter(blogRouteModule, 'createBlogRouter', 'blogRouter');
+const adminRouter = pickRouter(adminRouteModule, 'createAdminRouter', 'adminRouter');
+const contactRouter = pickRouter(contactRouteModule, 'createContactRouter', 'contactRouter');
+const statusRouter = pickRouter(statusRouteModule, 'createStatusRouter', 'statusRouter');
 
 const mountHttpRoutes = (target) => {
   target.use(healthRouter);
@@ -212,6 +254,11 @@ const mountHttpRoutes = (target) => {
   target.use(groupsRouter);
   target.use(callsRouter);
   target.use(keysRouter);
+  target.use(communityRouter);
+  target.use(blogRouter);
+  target.use(adminRouter);
+  target.use(contactRouter);
+  target.use(statusRouter);
 };
 
 mountHttpRoutes(app);
@@ -327,4 +374,10 @@ module.exports = {
   Call,
   OpkRequestLog,
   MessageSequence,
+  BlogPost,
+  Event,
+  EventRegistration,
+  NewsletterSubscriber,
+  SupportTicket,
+  RefreshToken,
 };

@@ -96,6 +96,38 @@ const PROFILE_PICTURE_MIME_TYPES = [
 /** Upload directory for profile pictures */
 const UPLOADS_DIR = 'uploads';
 
+/** Max file size for banner images (bytes) */
+const BANNER_MAX_SIZE = 8_000_000; // 8 MB
+
+/** Allowed MIME types for banner images */
+const BANNER_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+];
+
+// ============================================================================
+// Blog / Community / Support Configuration
+// ============================================================================
+
+/** Maximum slug length for blog posts and events */
+const BLOG_SLUG_MAX_LENGTH = 200;
+
+/** Maximum blog title length */
+const BLOG_TITLE_MAX_LENGTH = 300;
+
+/** Maximum support ticket message length (characters) */
+const SUPPORT_MESSAGE_MAX_LENGTH = 10_000;
+
+/** Maximum support ticket subject length */
+const SUPPORT_SUBJECT_MAX_LENGTH = 300;
+
+/** Default page size for paginated event lists */
+const EVENT_LIST_DEFAULT_LIMIT = 20;
+
+/** Hard cap for event list pagination */
+const EVENT_LIST_MAX_LIMIT = 100;
+
 // ============================================================================
 // Message Configuration
 // ============================================================================
@@ -136,8 +168,20 @@ const JWT_SECRET = process.env.JWT_SECRET;
 // Auth Configuration
 // ============================================================================
 
-/** JWT token expiration time */
-const JWT_EXPIRATION = '24h';
+/** @deprecated Use ACCESS_TOKEN_TTL instead. Retained for backwards compatibility. */
+const JWT_EXPIRATION = '1h';
+
+/** Access JWT lifetime. Frontend refreshes proactively via /auth/refresh. */
+const ACCESS_TOKEN_TTL = '1h';
+
+/** Same as ACCESS_TOKEN_TTL but in seconds — surfaced to clients as `expiresIn`. */
+const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+
+/** Refresh token lifetime (seconds). MongoDB TTL index deletes after this. */
+const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+/** Random bytes used to generate the opaque refresh token (hex doubles the length). */
+const REFRESH_TOKEN_BYTES = 64;
 
 /** Bcrypt salt rounds for password hashing */
 const BCRYPT_SALT_ROUNDS = 10;
@@ -191,6 +235,16 @@ module.exports = {
   PROFILE_PICTURE_MAX_SIZE,
   PROFILE_PICTURE_MIME_TYPES,
   UPLOADS_DIR,
+  BANNER_MAX_SIZE,
+  BANNER_MIME_TYPES,
+
+  // Blog / Community / Support
+  BLOG_SLUG_MAX_LENGTH,
+  BLOG_TITLE_MAX_LENGTH,
+  SUPPORT_MESSAGE_MAX_LENGTH,
+  SUPPORT_SUBJECT_MAX_LENGTH,
+  EVENT_LIST_DEFAULT_LIMIT,
+  EVENT_LIST_MAX_LIMIT,
 
   // Messages
   MAX_MESSAGE_LENGTH,
@@ -208,6 +262,10 @@ module.exports = {
 
   // Auth
   JWT_EXPIRATION,
+  ACCESS_TOKEN_TTL,
+  ACCESS_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_BYTES,
   BCRYPT_SALT_ROUNDS,
 
   // Logging

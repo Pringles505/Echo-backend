@@ -21,6 +21,8 @@ function createModels(mongoose) {
     ],
     aboutme: { type: String, default: '' },
     profilePicture: { type: String, default: '' },
+    banner: { type: String, default: '' },
+    role: { type: String, enum: ['user', 'admin'], default: 'user', index: true },
   });
 
   const messageSchema = new mongoose.Schema({
@@ -139,6 +141,111 @@ function createModels(mongoose) {
     updatedAt: { type: Date, default: Date.now },
   });
 
+  const blogPostSchema = new mongoose.Schema({
+    slug: { type: String, unique: true, index: true },
+    title: { type: String, required: true },
+    excerpt: { type: String, default: '' },
+    content: { type: String, required: true },
+    coverImage: { type: String, default: '' },
+    tags: { type: [String], default: [] },
+    authorId: { type: String, required: true, index: true },
+    status: {
+      type: String,
+      enum: ['draft', 'published', 'archived'],
+      default: 'draft',
+      index: true,
+    },
+    publishedAt: { type: Date, default: null },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  });
+
+  const eventSchema = new mongoose.Schema({
+    eventId: { type: String, unique: true, index: true },
+    slug: { type: String, unique: true, index: true },
+    title: { type: String, required: true },
+    description: { type: String, default: '' },
+    eventType: {
+      type: String,
+      enum: ['event', 'hackathon', 'workshop', 'meetup'],
+      default: 'event',
+    },
+    location: { type: String, default: '' },
+    startsAt: { type: Date, required: true, index: true },
+    endsAt: { type: Date, default: null },
+    capacity: { type: Number, default: 0 },
+    registeredCount: { type: Number, default: 0 },
+    bannerImage: { type: String, default: '' },
+    status: {
+      type: String,
+      enum: ['draft', 'active', 'cancelled', 'ended'],
+      default: 'draft',
+      index: true,
+    },
+    createdBy: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  });
+
+  const eventRegistrationSchema = new mongoose.Schema({
+    eventId: { type: String, required: true, index: true },
+    userId: { type: String, required: true, index: true },
+    status: {
+      type: String,
+      enum: ['registered', 'cancelled', 'attended'],
+      default: 'registered',
+    },
+    registeredAt: { type: Date, default: Date.now },
+  });
+  eventRegistrationSchema.index({ eventId: 1, userId: 1 }, { unique: true });
+
+  const newsletterSubscriberSchema = new mongoose.Schema({
+    email: { type: String, unique: true, lowercase: true, trim: true, index: true },
+    status: { type: String, enum: ['active', 'unsubscribed'], default: 'active' },
+    source: { type: String, default: 'web' },
+    ip: { type: String, default: null },
+    userAgent: { type: String, default: null },
+    subscribedAt: { type: Date, default: Date.now },
+  });
+
+  const refreshTokenSchema = new mongoose.Schema({
+    tokenHash: { type: String, required: true, unique: true, index: true },
+    userId: { type: String, required: true, index: true },
+    expiresAt: { type: Date, required: true },
+    revoked: { type: Boolean, default: false, index: true },
+    revokedAt: { type: Date, default: null },
+    replacedBy: { type: String, default: null },
+    reusedAt: { type: Date, default: null },
+    userAgent: { type: String, default: null },
+    ip: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now },
+  });
+  refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  refreshTokenSchema.index({ userId: 1, revoked: 1 });
+
+  const supportTicketSchema = new mongoose.Schema({
+    ticketId: { type: String, unique: true, index: true },
+    name: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
+    subject: { type: String, required: true },
+    category: {
+      type: String,
+      enum: ['technical', 'account', 'billing', 'general'],
+      default: 'general',
+    },
+    message: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ['open', 'in_progress', 'resolved', 'closed'],
+      default: 'open',
+      index: true,
+    },
+    userId: { type: String, default: null },
+    ip: { type: String, default: null },
+    userAgent: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now, index: true },
+  });
+
   const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
   const User = mongoose.models.User || mongoose.model('User', userSchema);
   const MessageSequence =
@@ -151,6 +258,17 @@ function createModels(mongoose) {
   const GroupSequence =
     mongoose.models.GroupSequence || mongoose.model('GroupSequence', groupSequenceSchema);
   const KeyPackage = mongoose.models.KeyPackage || mongoose.model('KeyPackage', keyPackageSchema);
+  const BlogPost = mongoose.models.BlogPost || mongoose.model('BlogPost', blogPostSchema);
+  const Event = mongoose.models.Event || mongoose.model('Event', eventSchema);
+  const EventRegistration =
+    mongoose.models.EventRegistration || mongoose.model('EventRegistration', eventRegistrationSchema);
+  const NewsletterSubscriber =
+    mongoose.models.NewsletterSubscriber ||
+    mongoose.model('NewsletterSubscriber', newsletterSubscriberSchema);
+  const SupportTicket =
+    mongoose.models.SupportTicket || mongoose.model('SupportTicket', supportTicketSchema);
+  const RefreshToken =
+    mongoose.models.RefreshToken || mongoose.model('RefreshToken', refreshTokenSchema);
 
   return {
     Message,
@@ -162,6 +280,12 @@ function createModels(mongoose) {
     GroupMember,
     GroupSequence,
     KeyPackage,
+    BlogPost,
+    Event,
+    EventRegistration,
+    NewsletterSubscriber,
+    SupportTicket,
+    RefreshToken,
   };
 }
 

@@ -47,10 +47,12 @@ function createUsersRouter(deps = {}) {
     Message: models.Message,
     bcrypt,
     saveProfilePicture: services.saveProfilePicture,
+    saveBanner: services.saveBanner,
     notifier,
   });
 
   const searchLimiter = deps.searchLimiter || rateLimit.searchLimiter;
+  const bannerLimiter = deps.bannerLimiter || rateLimit.bannerLimiter;
 
   if (!mongoose) throw new Error('createUsersRouter requires mongoose');
   if (typeof requireAuth !== 'function') {
@@ -61,6 +63,9 @@ function createUsersRouter(deps = {}) {
   const dbGuard = requireDatabase(mongoose);
   const searchLimit = typeof searchLimiter === 'function'
     ? searchLimiter
+    : (_req, _res, next) => next();
+  const bannerLimit = typeof bannerLimiter === 'function'
+    ? bannerLimiter
     : (_req, _res, next) => next();
 
   function handleServiceError(res, next, err) {
@@ -98,9 +103,9 @@ function createUsersRouter(deps = {}) {
    */
   router.post(
     '/users/search',
-    searchLimit,
     requireAuth,
     dbGuard,
+    searchLimit,
     validateBody([
       { field: 'searchTerm', type: 'string' },
     ]),
@@ -179,6 +184,55 @@ function createUsersRouter(deps = {}) {
           userId,
           changes: req.body || {},
         });
+        return res.json({ success: true, user });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
+
+  /**
+   * @openapi
+   * /users/profile/banner:
+   *   put:
+   *     tags: [Users]
+   *     summary: Update authenticated user's profile banner
+   *     description: |
+   *       Uploads a base64-encoded banner image (`data:image/...`) and stores
+   *       the resulting URL on the user's profile. Mirrors the profile-picture
+   *       upload flow but keeps the cover banner independent.
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/BannerUpdateRequest'
+   *     responses:
+   *       200:
+   *         description: Banner updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/BannerUpdateResponse'
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       429: { $ref: '#/components/responses/RateLimitedResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.put(
+    '/users/profile/banner',
+    requireAuth,
+    bannerLimit,
+    dbGuard,
+    validateBody([
+      { field: 'banner', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { banner } = req.body;
+        const user = await userProfileService.updateBanner({ userId, banner });
         return res.json({ success: true, user });
       } catch (err) {
         return handleServiceError(res, next, err);
