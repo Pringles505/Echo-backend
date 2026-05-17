@@ -25,6 +25,13 @@ function createAuthRouter({ authService, mongoose, registerLimiter, loginLimiter
   const registerLimit = typeof registerLimiter === 'function' ? registerLimiter : (_req, _res, next) => next();
   const loginLimit = typeof loginLimiter === 'function' ? loginLimiter : (_req, _res, next) => next();
 
+  function requestMetadata(req) {
+    return {
+      ipAddress: req.ip || req.socket?.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+    };
+  }
+
   /**
    * @openapi
    * /auth/register:
@@ -62,15 +69,22 @@ function createAuthRouter({ authService, mongoose, registerLimiter, loginLimiter
     ]),
     async (req, res, next) => {
       try {
-        const { username, password, keyBundle, aboutme, profilePicture } = req.body;
-        const { userId } = await authService.register({
+        const { username, password, keyBundle, aboutme, profilePicture, deviceId, deviceName, platform, userAgent, locale, timezone } = req.body;
+        const result = await authService.register({
           username,
           password,
           keyBundle,
           aboutme,
           profilePicture,
+          deviceId,
+          deviceName,
+          platform,
+          userAgent,
+          locale,
+          timezone,
+          requestMetadata: requestMetadata(req),
         });
-        return res.status(201).json({ success: true, userId });
+        return res.status(201).json({ success: true, ...result });
       } catch (err) {
         if (err?.code === 11000 && err?.keyPattern?.username) {
           return sendHttpError(res, 409, 'Username already taken', 'username_conflict');
@@ -118,8 +132,18 @@ function createAuthRouter({ authService, mongoose, registerLimiter, loginLimiter
     ]),
     async (req, res, next) => {
       try {
-        const { username, password } = req.body;
-        const result = await authService.login({ username, password });
+        const { username, password, deviceId, deviceName, platform, userAgent, locale, timezone } = req.body;
+        const result = await authService.login({
+          username,
+          password,
+          deviceId,
+          deviceName,
+          platform,
+          userAgent,
+          locale,
+          timezone,
+          requestMetadata: requestMetadata(req),
+        });
         if (!result || result.success === false) {
           return sendHttpError(
             res,
@@ -128,7 +152,13 @@ function createAuthRouter({ authService, mongoose, registerLimiter, loginLimiter
             'invalid_credentials'
           );
         }
-        return res.json({ success: true, token: result.token, userId: result.userId });
+        return res.json({
+          success: true,
+          token: result.token,
+          userId: result.userId,
+          deviceId: result.deviceId,
+          deviceUserId: result.deviceUserId,
+        });
       } catch (err) {
         if (err?.status) {
           return sendHttpError(res, err.status, err.message, err.code, err.details);

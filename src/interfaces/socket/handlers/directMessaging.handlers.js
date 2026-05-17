@@ -101,10 +101,7 @@ function registerDirectMessagingSocketHandlers(deps) {
 
       console.log('Updated messages seenStatus:', result);
 
-      const senderSocketId = userSocketMap[targetUserId];
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('messageSeenUpdate', { userId: authedUserId, targetUserId });
-      }
+      io.to(targetUserId).emit('messageSeenUpdate', { userId: authedUserId, targetUserId });
     } catch (err) {
       console.error('Error updating seenStatus:', err);
     }
@@ -247,14 +244,7 @@ function registerDirectMessagingSocketHandlers(deps) {
       };
 
       io.to(room).emit('newMessage', messageWithProfile);
-
-      const targetSocketId = userSocketMap[targetUserIdStr];
-      if (targetSocketId) {
-        const targetSocket = io.sockets.sockets.get(targetSocketId);
-        if (!targetSocket || !targetSocket.rooms.has(room)) {
-          io.to(targetSocketId).emit('newMessage', messageWithProfile);
-        }
-      }
+      io.to(targetUserIdStr).except(room).emit('newMessage', messageWithProfile);
 
       ack({ success: true });
     } catch (err) {

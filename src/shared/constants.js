@@ -45,6 +45,11 @@ const CORS_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://chat-tuah-frontend.vercel.app',
+  // Tauri v1 WebView origin
+  'tauri://localhost',
+  // Tauri v2 WebView origin
+  'http://tauri.localhost',
+  'https://tauri.localhost',
 ];
 
 /** Default server port */

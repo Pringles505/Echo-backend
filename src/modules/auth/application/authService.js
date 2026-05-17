@@ -48,7 +48,54 @@ const { customAlphabet } = require('nanoid');
  * @param {number} deps.OPK_MAX_STORED - Maximum OPKs per user
  * @returns {object} Service with register and login methods
  */
-function createAuthService({ User, bcrypt, jwt, normalizeOneTimePreKeysPayload, OPK_MAX_STORED }) {
+function cleanString(value, maxLength = 512) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, maxLength);
+}
+
+function normalizeIp(ip) {
+  const value = cleanString(ip, 128);
+  return value ? value.replace(/^::ffff:/, '') : null;
+}
+
+function isPrivateIp(ip) {
+  return Boolean(
+    ip &&
+      (ip === '127.0.0.1' ||
+        ip === '::1' ||
+        ip.startsWith('10.') ||
+        ip.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip) ||
+        ip.startsWith('fc') ||
+        ip.startsWith('fd') ||
+        ip.startsWith('fe80:'))
+  );
+}
+
+function ipLocationLabel(ip) {
+  if (!ip) return null;
+  if (ip === '127.0.0.1' || ip === '::1') return 'Localhost';
+  if (isPrivateIp(ip)) return 'Private network';
+  return 'Public IP';
+}
+
+function metadataSet(input = {}, requestMetadata = {}) {
+  const ipAddress = normalizeIp(requestMetadata.ipAddress || input.ipAddress);
+  const metadata = {
+    deviceName: cleanString(input.deviceName, 120),
+    platform: cleanString(input.platform, 80),
+    userAgent: cleanString(requestMetadata.userAgent || input.userAgent, 512),
+    ipAddress,
+    ipLocation: cleanString(input.ipLocation, 120) || ipLocationLabel(ipAddress),
+    locale: cleanString(input.locale, 40),
+    timezone: cleanString(input.timezone, 80),
+  };
+  return Object.fromEntries(Object.entries(metadata).filter(([, value]) => value != null));
+}
+
+function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysPayload, OPK_MAX_STORED }) {
   return {
     /**
      * Register a new user account.
@@ -56,7 +103,7 @@ function createAuthService({ User, bcrypt, jwt, normalizeOneTimePreKeysPayload, 
      * @returns {Promise<RegisterResult>}
      * @throws {Error} If username is duplicate or validation fails
      */
-    async register({ username, password, keyBundle, aboutme, profilePicture }) {
+    async register({ username, password, keyBundle, aboutme, profilePicture, deviceId, deviceName, platform, userAgent, locale, timezone, requestMetadata }) {
       const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey, oneTimePreKeys } = keyBundle;
       const [signedPreKey, signature] = publicSignedPreKey;
 
@@ -80,6 +127,33 @@ function createAuthService({ User, bcrypt, jwt, normalizeOneTimePreKeysPayload, 
       });
 
       await user.save();
+
+      if (Device && deviceId) {
+        const primaryDeviceUserId = `${username}_primary`;
+        try {
+          await Device.create({
+            deviceId,
+            parentUserId: id,
+            deviceUserId: primaryDeviceUserId,
+            deviceName: deviceName || 'Primary device',
+            ...metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata),
+            isPrimary: true,
+            isRevoked: false,
+            publicIdentityKeyX25519,
+            publicIdentityKeyEd25519,
+            signedPreKey,
+            signedPreKeySignature: signature,
+            provisionedVia: 'registration',
+            lastSeen: new Date(),
+          });
+        } catch (deviceErr) {
+          await user.deleteOne().catch(() => {});
+          throw deviceErr;
+        }
+        await User.updateOne({ id }, { $addToSet: { devices: deviceId } });
+        return { userId: id, deviceId, deviceUserId: primaryDeviceUserId };
+      }
+
       return { userId: id };
     },
 
@@ -88,20 +162,87 @@ function createAuthService({ User, bcrypt, jwt, normalizeOneTimePreKeysPayload, 
      * @param {LoginInput} input
      * @returns {Promise<LoginResult>}
      */
-    async login({ username, password }) {
+    async login({ username, password, deviceId, deviceName, platform, userAgent, locale, timezone, requestMetadata }) {
       const user = await User.findOne({ username });
       if (!user) return { success: false, error: 'Invalid username or password' };
 
       const isMatch = await bcrypt.compare(password, user.hashedPassword);
       if (!isMatch) return { success: false, error: 'Invalid username or password' };
 
-      const token = jwt.sign(
-        { id: user.id, username: user.username },
-        process.env.JWT_SECRET,
-        { expiresIn: '1d' }
-      );
+      let deviceRecord = null;
+      if (Device && deviceId) {
+        deviceRecord = await this.upsertDeviceRecord({
+          userId: user.id,
+          deviceId,
+          deviceName,
+          platform,
+          userAgent,
+          locale,
+          timezone,
+          requestMetadata,
+          provisionedVia: 'device-sync',
+        });
+      }
 
-      return { success: true, token, userId: user.id };
+      const payload = { id: user.id, username: user.username };
+      const resolvedDeviceId = deviceRecord?.deviceId || deviceId || null;
+      if (resolvedDeviceId) payload.deviceId = resolvedDeviceId;
+      if (deviceRecord?.deviceUserId) payload.deviceUserId = deviceRecord.deviceUserId;
+      if (platform) payload.platform = platform;
+
+      const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
+
+      return { success: true, token, userId: user.id, deviceId: resolvedDeviceId, deviceUserId: deviceRecord?.deviceUserId || null };
+    },
+
+    issueDeviceJwt({ userId, username, deviceId, deviceUserId, platform }) {
+      const payload = { id: userId, username };
+      if (deviceId) payload.deviceId = deviceId;
+      if (deviceUserId) payload.deviceUserId = deviceUserId;
+      if (platform) payload.platform = platform;
+      return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
+    },
+
+    async upsertDeviceRecord({ userId, deviceId, deviceName, platform, userAgent, locale, timezone, requestMetadata, provisionedVia }) {
+      if (!Device) return null;
+      const user = await User.findOne({ id: userId }).lean();
+      if (!user) return null;
+      let resolvedDeviceId = deviceId;
+      let existing = await Device.findOne({ deviceId: resolvedDeviceId });
+      if (existing) {
+        if (String(existing.parentUserId) !== String(userId)) {
+          const nanoid = customAlphabet('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 24);
+          resolvedDeviceId = `device-${nanoid()}`;
+          existing = null;
+        }
+      }
+
+      if (existing) {
+        existing.lastSeen = new Date();
+        Object.assign(existing, metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata));
+        await existing.save();
+        await User.updateOne({ id: userId }, { $addToSet: { devices: resolvedDeviceId } });
+        return { deviceId: resolvedDeviceId, deviceUserId: existing.deviceUserId, created: false };
+      }
+      const secondaryCount = await Device.countDocuments({
+        parentUserId: userId,
+        isPrimary: false,
+        isRevoked: false,
+      });
+      const deviceUserId = `${user.username}_x${secondaryCount + 1}`;
+      await Device.create({
+        deviceId: resolvedDeviceId,
+        parentUserId: userId,
+        deviceUserId,
+        deviceName: deviceName || platform || 'New device',
+        ...metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata),
+        isPrimary: false,
+        isRevoked: false,
+        provisionedVia: provisionedVia || 'device-sync',
+        lastSeen: new Date(),
+      });
+      await User.updateOne({ id: userId }, { $addToSet: { devices: resolvedDeviceId } });
+      return { deviceId: resolvedDeviceId, deviceUserId, created: true };
     },
   };
 }

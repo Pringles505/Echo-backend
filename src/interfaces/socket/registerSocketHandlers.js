@@ -5,6 +5,8 @@ const { registerDirectMessagingSocketHandlers } = require('./handlers/directMess
 const { registerGroupsSocketHandlers } = require('./handlers/groups.handlers');
 const { registerCallsSocketHandlers } = require('./handlers/calls.handlers');
 const { registerContactsAccountSocketHandlers } = require('./handlers/contactsAccount.handlers');
+const { registerDeviceSyncSocketHandlers } = require('./handlers/deviceSync.handlers');
+const { registerDeviceEnvelopeSocketHandlers } = require('./handlers/deviceEnvelope.handlers');
 
 /**
  * Public socket adapter entrypoint for binding all runtime handlers.
@@ -20,8 +22,8 @@ const { registerContactsAccountSocketHandlers } = require('./handlers/contactsAc
  * @param {object} deps.opkLimiter
  */
 function registerSocketHandlers(deps) {
-  const { socket, io, userSocketMap, models, services, authService, opkPolicy, opkLimiter, bcrypt } = deps;
-  const { Message, User, MessageSequence, Group, GroupMember, GroupSequence, KeyPackage, Call } = models;
+  const { socket, io, userSocketMap, models, services, authService, opkPolicy, opkLimiter, bcrypt, deviceSyncService } = deps;
+  const { Message, User, MessageSequence, Group, GroupMember, GroupSequence, KeyPackage, Call, Device } = models;
   const { makeConversationKey, ensureConversationSequence, ensureGroupSequence, createCallEventMessage, saveProfilePicture } = services;
 
   const PUBLIC_EVENTS = new Set(['login', 'register']);
@@ -45,6 +47,7 @@ function registerSocketHandlers(deps) {
     io,
     userSocketMap,
     User,
+    Device,
     opkLimiter,
     ...opkPolicy,
   });
@@ -86,6 +89,8 @@ function registerSocketHandlers(deps) {
     bcrypt,
     saveProfilePicture,
   });
+  registerDeviceSyncSocketHandlers({ socket, deviceSyncService });
+  registerDeviceEnvelopeSocketHandlers({ socket });
 }
 
 module.exports = { registerSocketHandlers };

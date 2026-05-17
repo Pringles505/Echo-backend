@@ -35,6 +35,13 @@ const contactsRouteModule = require('./src/interfaces/http/routes/contacts.route
 const groupsRouteModule = require('./src/interfaces/http/routes/groups.route');
 const callsRouteModule = require('./src/interfaces/http/routes/calls.route');
 const keysRouteModule = require('./src/interfaces/http/routes/keys.route');
+const { createPairingRouter } = require('./src/interfaces/http/routes/pairing.route');
+const { createDevicesRouter } = require('./src/interfaces/http/routes/devices.route');
+const { createEnvelopesRouter } = require('./src/interfaces/http/routes/envelopes.route');
+const { createSyncRouter } = require('./src/interfaces/http/routes/sync.route');
+const { createPairingService } = require('./src/modules/devices/application/pairingService');
+const { createDeviceManagementService } = require('./src/modules/devices/application/deviceManagementService');
+const { createDeviceSyncService } = require('./src/modules/deviceSync/application/deviceSyncService');
 const { setupSwagger } = require('./src/interfaces/http/swagger');
 const { createAuthMiddleware } = require('./src/interfaces/http/middleware/auth');
 const { notFoundHandler, errorHandler } = require('./src/interfaces/http/middleware/errorHandlers');
@@ -110,15 +117,24 @@ const {
   GroupMember,
   GroupSequence,
   KeyPackage,
+  Device,
+  PairingSession,
+  MessageEnvelope,
+  DeviceSyncSession,
 } = createModels(mongoose);
 
 const authService = createAuthService({
   User,
+  Device,
   bcrypt,
   jwt,
   normalizeOneTimePreKeysPayload,
   OPK_MAX_STORED,
 });
+
+const pairingService = createPairingService({ PairingSession, Device, User, authService });
+const deviceManagementService = createDeviceManagementService({ Device, MessageEnvelope, User });
+const deviceSyncService = createDeviceSyncService({ DeviceSyncSession, User, authService });
 
 const sequenceService = createSequenceService({ Message, MessageSequence, GroupSequence });
 const callEventService = createCallEventService({ io, userSocketMap, Call, Message, User });
@@ -203,6 +219,11 @@ const groupsRouter = pickRouter(groupsRouteModule, 'createGroupsRouter', 'groups
 const callsRouter = pickRouter(callsRouteModule, 'createCallsRouter', 'callsRouter');
 const keysRouter = pickRouter(keysRouteModule, 'createKeysRouter', 'keysRouter');
 
+const pairingRouter = createPairingRouter({ pairingService, mongoose, requireAuth });
+const devicesRouter = createDevicesRouter({ deviceManagementService, mongoose, requireAuth });
+const envelopesRouter = createEnvelopesRouter({ deviceManagementService, mongoose, requireAuth });
+const syncRouter = createSyncRouter({ deviceSyncService, mongoose, requireAuth });
+
 const mountHttpRoutes = (target) => {
   target.use(healthRouter);
   target.use(authRouter);
@@ -212,6 +233,10 @@ const mountHttpRoutes = (target) => {
   target.use(groupsRouter);
   target.use(callsRouter);
   target.use(keysRouter);
+  target.use(pairingRouter);
+  target.use(devicesRouter);
+  target.use(envelopesRouter);
+  target.use(syncRouter);
 };
 
 mountHttpRoutes(app);
@@ -281,6 +306,7 @@ io.on('connection', (socket) => {
       GroupMember,
       GroupSequence,
       KeyPackage,
+      Device,
     },
     services: {
       makeConversationKey: sequenceService.makeConversationKey,
@@ -301,6 +327,7 @@ io.on('connection', (socket) => {
       estimateOpkCountAfterConsume,
     },
     opkLimiter,
+    deviceSyncService,
   });
 });
 

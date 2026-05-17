@@ -8,6 +8,7 @@ function createModels(mongoose) {
     username: { type: String, unique: true },
     hashedPassword: String,
     friends: [String],
+    devices: [{ type: String }],
     publicIdentityKeyX25519: String,
     publicIdentityKeyEd25519: String,
     signedPreKey: String,
@@ -135,6 +136,123 @@ function createModels(mongoose) {
     updatedAt: { type: Date, default: Date.now },
   });
 
+  const deviceSchema = new mongoose.Schema({
+    deviceId: { type: String, required: true, unique: true, index: true },
+    parentUserId: { type: String, required: true, index: true },
+    deviceUserId: { type: String, required: true, unique: true },
+    deviceName: { type: String, default: 'Unknown device' },
+    platform: { type: String, default: null },
+    userAgent: { type: String, default: null },
+    ipAddress: { type: String, default: null },
+    ipLocation: { type: String, default: null },
+    locale: { type: String, default: null },
+    timezone: { type: String, default: null },
+    isPrimary: { type: Boolean, default: false },
+    isRevoked: { type: Boolean, default: false },
+    publicIdentityKeyX25519: { type: String, default: null },
+    publicIdentityKeyEd25519: { type: String, default: null },
+    signedPreKey: { type: String, default: null },
+    signedPreKeySignature: { type: String, default: null },
+    signedPreKeyId: { type: Number, default: 0 },
+    oneTimePreKeys: [{ opkId: String, opkPub: String }],
+    deviceAuthorizationSignature: { type: String, default: null },
+    provisionedVia: {
+      type: String,
+      enum: ['registration', 'pairing', 'device-sync'],
+      default: 'registration',
+    },
+    createdAt: { type: Date, default: Date.now },
+    lastSeen: { type: Date, default: null },
+  });
+
+  const pairingSessionSchema = new mongoose.Schema({
+    sessionId: { type: String, required: true, unique: true, index: true },
+    parentUserId: { type: String, required: true, index: true },
+    primaryDeviceId: { type: String, default: null },
+    status: {
+      type: String,
+      enum: ['pending', 'awaiting_approval', 'approved', 'rejected', 'expired'],
+      default: 'pending',
+    },
+    challenge: { type: String, default: null },
+    expiresAt: { type: Date, required: true, index: true },
+    serverUrl: { type: String, default: null },
+    newDeviceId: { type: String, default: null },
+    newDeviceName: { type: String, default: null },
+    newDevicePlatform: { type: String, default: null },
+    newDeviceUserAgent: { type: String, default: null },
+    newDeviceIpAddress: { type: String, default: null },
+    newDeviceIpLocation: { type: String, default: null },
+    newDeviceLocale: { type: String, default: null },
+    newDeviceTimezone: { type: String, default: null },
+    newDevicePublicIdentityKeyX25519: { type: String, default: null },
+    newDevicePublicIdentityKeyEd25519: { type: String, default: null },
+    newDeviceSignedPreKey: { type: String, default: null },
+    newDeviceSignedPreKeySignature: { type: String, default: null },
+    challengeResponse: { type: String, default: null },
+    deviceAuthorizationSignature: { type: String, default: null },
+    approvedDeviceUserId: { type: String, default: null },
+    approvedToken: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now },
+  });
+  pairingSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
+
+  const messageEnvelopeSchema = new mongoose.Schema({
+    envelopeId: { type: String, required: true, unique: true, index: true },
+    logicalSenderId: { type: String, index: true },
+    senderDeviceId: { type: String, default: null },
+    logicalRecipientId: { type: String, default: null },
+    recipientDeviceId: { type: String, required: true, index: true },
+    ciphertext: { type: String, required: true },
+    nonce: { type: String, default: null },
+    header: { type: mongoose.Schema.Types.Mixed, default: null },
+    messageType: { type: String, default: 'message' },
+    conversationId: { type: String, default: null, index: true },
+    createdAt: { type: Date, default: Date.now, index: true },
+    deliveredAt: { type: Date, default: null },
+    readAt: { type: Date, default: null },
+  });
+  messageEnvelopeSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 7 });
+
+  const deviceSyncSessionSchema = new mongoose.Schema({
+    sessionId: { type: String, required: true, unique: true, index: true },
+    status: {
+      type: String,
+      enum: ['pending_source', 'awaiting_confirmation', 'transferring', 'completed', 'cancelled', 'expired'],
+      default: 'pending_source',
+    },
+    sessionCode: { type: String, default: null },
+    targetEphemeralPubKey: { type: String, required: true },
+    sourceEphemeralPubKey: { type: String, default: null },
+    targetAccessTokenHash: { type: String, required: true },
+    sourceUserId: { type: String, default: null, index: true },
+    sourceUsername: { type: String, default: null },
+    expiresAt: { type: Date, required: true, index: true },
+    origin: { type: String, default: null },
+    version: { type: String, default: null },
+    approvedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    cancelledAt: { type: Date, default: null },
+    totalChunkCount: { type: Number, default: 0 },
+    totalPayloadBytes: { type: Number, default: 0 },
+    sourceConfirmed: { type: Boolean, default: false },
+    targetConfirmed: { type: Boolean, default: false },
+    sourceDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
+    targetDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
+    chunks: [
+      {
+        index: Number,
+        totalCount: Number,
+        ciphertext: String,
+        nonce: { type: String, default: null },
+        digest: String,
+        size: Number,
+      },
+    ],
+    createdAt: { type: Date, default: Date.now },
+  });
+  deviceSyncSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
+
   const keyPackageSchema = new mongoose.Schema({
     // Item #20: userId is no longer unique alone — one record per (userId, clientId) pair
     // so multiple devices can publish independent KeyPackages.
@@ -164,6 +282,13 @@ function createModels(mongoose) {
   const GroupSequence =
     mongoose.models.GroupSequence || mongoose.model('GroupSequence', groupSequenceSchema);
   const KeyPackage = mongoose.models.KeyPackage || mongoose.model('KeyPackage', keyPackageSchema);
+  const Device = mongoose.models.Device || mongoose.model('Device', deviceSchema);
+  const PairingSession =
+    mongoose.models.PairingSession || mongoose.model('PairingSession', pairingSessionSchema);
+  const MessageEnvelope =
+    mongoose.models.MessageEnvelope || mongoose.model('MessageEnvelope', messageEnvelopeSchema);
+  const DeviceSyncSession =
+    mongoose.models.DeviceSyncSession || mongoose.model('DeviceSyncSession', deviceSyncSessionSchema);
 
   return {
     Message,
@@ -175,6 +300,10 @@ function createModels(mongoose) {
     GroupMember,
     GroupSequence,
     KeyPackage,
+    Device,
+    PairingSession,
+    MessageEnvelope,
+    DeviceSyncSession,
   };
 }
 
