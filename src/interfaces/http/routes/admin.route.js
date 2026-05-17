@@ -68,8 +68,8 @@ function createAdminRouter(deps = {}) {
    */
   router.post(
     '/admin/blog',
-    requireAdmin,
     dbGuard,
+    requireAdmin,
     validateBody([
       { field: 'title', type: 'string' },
       { field: 'content', type: 'string' },
@@ -128,8 +128,8 @@ function createAdminRouter(deps = {}) {
    */
   router.patch(
     '/admin/blog/:id',
-    requireAdmin,
     dbGuard,
+    requireAdmin,
     async (req, res, next) => {
       try {
         const { id } = req.params;
@@ -165,8 +165,8 @@ function createAdminRouter(deps = {}) {
    */
   router.post(
     '/admin/events',
-    requireAdmin,
     dbGuard,
+    requireAdmin,
     validateBody([
       { field: 'title', type: 'string' },
       { field: 'startsAt', type: 'string' },
