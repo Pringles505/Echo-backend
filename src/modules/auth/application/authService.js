@@ -21,10 +21,10 @@ function generatePlainRefreshToken() {
   return crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
 }
 
-function signAccessToken(jwt, user) {
+function signAccessToken(jwt, user, secret) {
   return jwt.sign(
     { id: user.id, username: user.username },
-    process.env.JWT_SECRET,
+    secret,
     { expiresIn: ACCESS_TOKEN_TTL }
   );
 }
@@ -33,11 +33,17 @@ function signAccessToken(jwt, user) {
  * Application service for authentication use cases. Implements the
  * access-token + rotating-refresh-token pattern with reuse detection.
  *
+ * The JWT signing secret is captured at construction time so we fail fast
+ * during startup if `JWT_SECRET` is missing in the environment, instead of
+ * deferring to the first login (where `jwt.sign(payload, undefined, ...)`
+ * surfaces a cryptic error).
+ *
  * @param {object} deps
  * @param {*} deps.User - Mongoose User model
  * @param {*} deps.RefreshToken - Mongoose RefreshToken model
  * @param {*} deps.bcrypt
  * @param {*} deps.jwt
+ * @param {string} [deps.jwtSecret] - signing secret; defaults to process.env.JWT_SECRET
  * @param {function} deps.normalizeOneTimePreKeysPayload
  * @param {number} deps.OPK_MAX_STORED
  */
@@ -46,12 +52,17 @@ function createAuthService({
   RefreshToken,
   bcrypt,
   jwt,
+  jwtSecret,
   normalizeOneTimePreKeysPayload,
   OPK_MAX_STORED,
 }) {
   if (!User) throw new Error('createAuthService requires User model');
   if (!bcrypt) throw new Error('createAuthService requires bcrypt');
   if (!jwt) throw new Error('createAuthService requires jwt');
+  const secret = jwtSecret || process.env.JWT_SECRET;
+  if (!secret || typeof secret !== 'string' || secret.length === 0) {
+    throw new Error('createAuthService requires a non-empty jwtSecret (or JWT_SECRET env var)');
+  }
 
   async function issueRefreshToken({ userId, ip, userAgent }) {
     const plain = generatePlainRefreshToken();
@@ -111,7 +122,7 @@ function createAuthService({
       const isMatch = await bcrypt.compare(password, user.hashedPassword);
       if (!isMatch) return { success: false, error: 'Invalid username or password' };
 
-      const token = signAccessToken(jwt, user);
+      const token = signAccessToken(jwt, user, secret);
 
       let refreshToken = null;
       if (RefreshToken && typeof RefreshToken.create === 'function') {
@@ -171,7 +182,7 @@ function createAuthService({
       stored.replacedBy = issued.tokenHash;
       await stored.save();
 
-      const token = signAccessToken(jwt, user);
+      const token = signAccessToken(jwt, user, secret);
       return {
         token,
         refreshToken: issued.plain,
@@ -189,6 +200,12 @@ function createAuthService({
     async logout({ refreshToken, userId } = {}) {
       if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
         throw new BadRequestError('refreshToken is required', 'validation_error');
+      }
+      if (typeof userId !== 'string' || userId.length === 0) {
+        // Without a concrete userId, Mongoose would drop the field from the
+        // query and the call would revoke ANY refresh token matching the hash
+        // — i.e. another user's. Refuse explicitly.
+        throw new BadRequestError('userId is required', 'validation_error');
       }
       if (!RefreshToken || typeof RefreshToken.findOneAndUpdate !== 'function') {
         throw new Error('createAuthService.logout requires RefreshToken model');
