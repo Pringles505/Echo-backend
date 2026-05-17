@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## 1.3.0 (2026-05-17)
+
+
+### Features
+
+* renames ciphersuit to Echo-MLS-TreeKEM ([97b5489](https://github.com/echo-chat-protocol/echo-backend/commit/97b5489edf505e4b9a814e006bf39435fdb1abf3))
+
+
+### Bug Fixes
+
+* **auth:** harden secret injection and validate userId in logout ([26745fa](https://github.com/echo-chat-protocol/echo-backend/commit/26745fa1ad32dd088e0b3b4a53f277f712b33ca2))
+
 ### [1.2.1](https://github.com/echo-chat-protocol/echo-backend/compare/v1.2.0...v1.2.1) (2026-05-17)
 
 
