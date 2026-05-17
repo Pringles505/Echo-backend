@@ -181,8 +181,10 @@ function createEventsService({ Event, EventRegistration } = {}) {
 
     /**
      * Register the authenticated user for an active event.
-     * Increments registeredCount atomically only after the unique
-     * (eventId, userId) constraint is satisfied.
+     * Capacity is reserved atomically via a conditional `$inc` so concurrent
+     * registrations cannot oversubscribe past `capacity`. The created
+     * registration is the second step; if it fails for any reason the
+     * reservation is rolled back with a compensating `$inc: -1`.
      * @param {{ eventId: string, userId: string }} input
      */
     async registerForEvent({ eventId, userId }) {
@@ -193,12 +195,25 @@ function createEventsService({ Event, EventRegistration } = {}) {
         throw new BadRequestError('userId is required', 'validation_error');
       }
 
-      const event = await Event.findOne({ eventId }).lean();
-      if (!event) throw new NotFoundError('Event not found', 'event_not_found');
-      if (event.status !== 'active') {
-        throw new BadRequestError('Event is not open for registration', 'event_not_active');
-      }
-      if (event.capacity > 0 && event.registeredCount >= event.capacity) {
+      const reserved = await Event.findOneAndUpdate(
+        {
+          eventId,
+          status: 'active',
+          $or: [
+            { capacity: { $lte: 0 } },
+            { $expr: { $lt: ['$registeredCount', '$capacity'] } },
+          ],
+        },
+        { $inc: { registeredCount: 1 } },
+        { new: true }
+      ).lean();
+
+      if (!reserved) {
+        const event = await Event.findOne({ eventId }).lean();
+        if (!event) throw new NotFoundError('Event not found', 'event_not_found');
+        if (event.status !== 'active') {
+          throw new BadRequestError('Event is not open for registration', 'event_not_active');
+        }
         throw new ConflictError('Event is full', 'event_full');
       }
 
@@ -210,13 +225,12 @@ function createEventsService({ Event, EventRegistration } = {}) {
           registeredAt: new Date(),
         });
       } catch (err) {
+        await Event.updateOne({ eventId }, { $inc: { registeredCount: -1 } });
         if (err?.code === 11000) {
           throw new ConflictError('Already registered', 'already_registered');
         }
         throw err;
       }
-
-      await Event.updateOne({ eventId }, { $inc: { registeredCount: 1 } });
 
       return { registered: true, eventId, userId };
     },
