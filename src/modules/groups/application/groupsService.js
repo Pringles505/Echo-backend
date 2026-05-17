@@ -83,7 +83,7 @@ function createGroupsService({
       const normalizedCipherSuite = wantsMls
         ? (typeof cipherSuite === 'string' && cipherSuite.trim().length > 0
             ? cipherSuite.trim()
-            : 'MLS-MVP/X25519_AES256GCM_SHA256')
+            : 'Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256')
         : null;
 
       const normalizedMemberIds = [...new Set(
