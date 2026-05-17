@@ -96,7 +96,29 @@ test('POST /auth/register returns 503 when DB is unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-test('POST /auth/login returns 200 with token on success', async () => {
+test('POST /auth/login returns 200 with token + refreshToken on success', async () => {
+  const authService = {
+    register: async () => ({}),
+    login: async () => ({
+      success: true,
+      token: 'jwt.token',
+      refreshToken: 'r3fr3sh',
+      userId: 'U1',
+      expiresIn: 3600,
+    }),
+  };
+  const app = buildApp({ authService });
+
+  const res = await request(app).post('/auth/login').send({ username: 'a', password: 'p' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.token, 'jwt.token');
+  assert.equal(res.body.refreshToken, 'r3fr3sh');
+  assert.equal(res.body.userId, 'U1');
+  assert.equal(res.body.expiresIn, 3600);
+});
+
+test('POST /auth/login backwards-compatible when service omits refreshToken (legacy services)', async () => {
   const authService = {
     register: async () => ({}),
     login: async () => ({ success: true, token: 'jwt.token', userId: 'U1' }),
@@ -105,7 +127,9 @@ test('POST /auth/login returns 200 with token on success', async () => {
 
   const res = await request(app).post('/auth/login').send({ username: 'a', password: 'p' });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { success: true, token: 'jwt.token', userId: 'U1' });
+  assert.equal(res.body.token, 'jwt.token');
+  assert.equal(res.body.refreshToken, undefined);
+  assert.equal(res.body.expiresIn, undefined);
 });
 
 test('POST /auth/login returns 401 on invalid credentials (service returns success:false)', async () => {
