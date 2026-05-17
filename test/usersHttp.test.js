@@ -61,6 +61,7 @@ function makeService(overrides = {}) {
     searchUser: async () => ({ id: 'U2', username: 'bob' }),
     getUserById: async () => ({ id: 'U2', username: 'bob' }),
     updateProfile: async () => ({ id: 'U1', username: 'alice' }),
+    updateBanner: async () => ({ id: 'U1', username: 'alice', banner: '/uploads/banner.png' }),
     deleteAccount: async () => ({ deleted: true }),
     listOnlineUserIds: () => ['U1', 'U2'],
     ...overrides,
@@ -251,6 +252,68 @@ test('PUT /users/profile/update 401 without token', async () => {
   const app = buildApp({ userProfileService: makeService() });
   const res = await request(app).put('/users/profile/update').send({ aboutme: 'x' });
   assert.equal(res.status, 401);
+});
+
+// ---------------------------------------------------------------- /users/profile/banner
+
+test('PUT /users/profile/banner 200 with updated banner url', async () => {
+  const seen = [];
+  const svc = makeService({
+    updateBanner: async (input) => {
+      seen.push(input);
+      return { id: 'U1', username: 'alice', banner: '/uploads/banner-U1-1.png' };
+    },
+  });
+  const app = buildApp({ userProfileService: svc });
+  const res = await authed(request(app).put('/users/profile/banner'))
+    .send({ banner: 'data:image/png;base64,iVBORw0KGgo=' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.user.banner, '/uploads/banner-U1-1.png');
+  assert.equal(seen[0].userId, 'U1');
+  assert.ok(seen[0].banner.startsWith('data:image/'));
+});
+
+test('PUT /users/profile/banner 400 when banner missing', async () => {
+  const app = buildApp({ userProfileService: makeService() });
+  const res = await authed(request(app).put('/users/profile/banner')).send({});
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'validation_error');
+});
+
+test('PUT /users/profile/banner 400 when banner not a data URL', async () => {
+  const svc = makeService({
+    updateBanner: async () => {
+      throw new BadRequestError(
+        'banner must be a base64 data URL (data:image/...)',
+        'validation_error'
+      );
+    },
+  });
+  const app = buildApp({ userProfileService: svc });
+  const res = await authed(request(app).put('/users/profile/banner'))
+    .send({ banner: 'http://example.com/banner.png' });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'validation_error');
+});
+
+test('PUT /users/profile/banner 401 without token', async () => {
+  const app = buildApp({ userProfileService: makeService() });
+  const res = await request(app)
+    .put('/users/profile/banner')
+    .send({ banner: 'data:image/png;base64,xxx' });
+  assert.equal(res.status, 401);
+});
+
+test('PUT /users/profile/banner 404 when user missing', async () => {
+  const svc = makeService({
+    updateBanner: async () => { throw new NotFoundError('User not found', 'user_not_found'); },
+  });
+  const app = buildApp({ userProfileService: svc });
+  const res = await authed(request(app).put('/users/profile/banner'))
+    .send({ banner: 'data:image/png;base64,xxx' });
+  assert.equal(res.status, 404);
+  assert.equal(res.body.code, 'user_not_found');
 });
 
 // ---------------------------------------------------------------- /users/account/delete

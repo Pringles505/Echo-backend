@@ -9,9 +9,11 @@ const { sendHttpError } = require('../errors/httpErrorResponse');
  * @param {object} deps
  * @param {*} deps.jwt - jsonwebtoken module
  * @param {string} [deps.secretEnv='JWT_SECRET'] - env var name to read secret from
- * @returns {{ requireAuth: import('express').RequestHandler, optionalAuth: import('express').RequestHandler }}
+ * @param {*} [deps.User] - Mongoose User model. When provided, requireAdmin
+ *   re-reads the role from the DB instead of trusting the JWT payload alone.
+ * @returns {{ requireAuth: import('express').RequestHandler, optionalAuth: import('express').RequestHandler, requireAdmin: import('express').RequestHandler }}
  */
-function createAuthMiddleware({ jwt, secretEnv = 'JWT_SECRET' } = {}) {
+function createAuthMiddleware({ jwt, secretEnv = 'JWT_SECRET', User } = {}) {
   if (!jwt || typeof jwt.verify !== 'function') {
     throw new Error('createAuthMiddleware requires a jwt module with verify()');
   }
@@ -60,7 +62,41 @@ function createAuthMiddleware({ jwt, secretEnv = 'JWT_SECRET' } = {}) {
     });
   };
 
-  return { requireAuth, optionalAuth };
+  /**
+   * Runs `requireAuth` and then asserts the authenticated user has the
+   * `admin` role. When a `User` model is wired into deps, role is re-read
+   * from the DB (defense in depth against stale JWTs). Otherwise it falls
+   * back to `req.user.role` from the JWT payload.
+   */
+  const requireAdmin = (req, res, next) => {
+    requireAuth(req, res, async (err) => {
+      if (err) return next(err);
+      try {
+        let role = req.user?.role;
+        if (User && typeof User.findOne === 'function') {
+          const fresh = await User.findOne({ id: req.user.id }, { role: 1 }).lean();
+          if (!fresh) {
+            return sendHttpError(res, 401, 'User no longer exists', 'unauthorized');
+          }
+          role = fresh.role;
+          req.user.role = role;
+        }
+        if (role !== 'admin') {
+          return sendHttpError(
+            res,
+            403,
+            'Admin privileges required',
+            'forbidden_admin_required'
+          );
+        }
+        return next();
+      } catch (e) {
+        return next(e);
+      }
+    });
+  };
+
+  return { requireAuth, optionalAuth, requireAdmin };
 }
 
 module.exports = { createAuthMiddleware };

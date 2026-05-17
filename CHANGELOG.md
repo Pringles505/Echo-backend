@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.2.0](https://github.com/echo-chat-protocol/echo-backend/compare/v1.1.1...v1.2.0) (2026-05-17)
+
+
+### Features
+
+* **api:** add community, blog, admin, support, status endpoints + profile banner ([0db24a5](https://github.com/echo-chat-protocol/echo-backend/commit/0db24a55c1ed67211135507372b2dfcc5e2dfac8))
+* **auth:** refresh token rotation with reuse detection ([d14a7ee](https://github.com/echo-chat-protocol/echo-backend/commit/d14a7ee4bbda98c468a0aea2551ffe906ed45867))
+* 
 ### 1.1.1 (2026-05-09)
 
 

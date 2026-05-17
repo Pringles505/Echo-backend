@@ -42,9 +42,17 @@ const {
  * @param {import('mongoose').Model} [deps.Message]
  * @param {*} deps.bcrypt - bcryptjs module
  * @param {function} [deps.saveProfilePicture] - (dataUrl, userId) => Promise<string>
+ * @param {function} [deps.saveBanner] - (dataUrl, userId) => Promise<string>
  * @param {{ listOnlineUserIds: () => string[] }} [deps.notifier]
  */
-function createUserProfileService({ User, Message, bcrypt, saveProfilePicture, notifier } = {}) {
+function createUserProfileService({
+  User,
+  Message,
+  bcrypt,
+  saveProfilePicture,
+  saveBanner,
+  notifier,
+} = {}) {
   if (!User) throw new Error('createUserProfileService requires User model');
   if (!bcrypt) throw new Error('createUserProfileService requires bcrypt');
 
@@ -79,6 +87,7 @@ function createUserProfileService({ User, Message, bcrypt, saveProfilePicture, n
         username: user.username,
         aboutme: user.aboutme,
         profilePicture: user.profilePicture,
+        banner: user.banner,
         friends: user.friends,
       };
     },
@@ -146,6 +155,45 @@ function createUserProfileService({ User, Message, bcrypt, saveProfilePicture, n
         username: user.username,
         aboutme: user.aboutme,
         profilePicture: user.profilePicture,
+        banner: user.banner,
+      };
+    },
+
+    /**
+     * Update the authenticated user's banner image.
+     * Accepts a base64 data URL and delegates to the injected `saveBanner`
+     * helper which writes a file under `/uploads/banner-...`.
+     * @param {{ userId: string, banner: string }} input
+     * @returns {Promise<{ id: string, username: string, banner: string }>}
+     */
+    async updateBanner({ userId, banner }) {
+      if (typeof userId !== 'string' || userId.length === 0) {
+        throw new BadRequestError('userId is required', 'validation_error');
+      }
+      if (typeof banner !== 'string' || !banner.startsWith('data:image/')) {
+        throw new BadRequestError(
+          'banner must be a base64 data URL (data:image/...)',
+          'validation_error'
+        );
+      }
+      if (typeof saveBanner !== 'function') {
+        throw new BadRequestError(
+          'Banner upload is not configured',
+          'banner_unsupported'
+        );
+      }
+
+      const user = await User.findOne({ id: userId });
+      if (!user) throw new NotFoundError('User not found', 'user_not_found');
+
+      const url = await saveBanner(banner, userId);
+      user.banner = url;
+      await user.save();
+
+      return {
+        id: user.id,
+        username: user.username,
+        banner: user.banner,
       };
     },
 

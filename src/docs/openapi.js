@@ -6,8 +6,17 @@ const OPERATION_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'options', '
 const PUBLIC_OPERATION_PATHS = new Set([
   '/auth/register',
   '/auth/login',
+  '/auth/refresh',
   '/health',
+  '/community/events',
+  '/community/subscribe',
+  '/contact/submit',
+  '/status/services',
 ]);
+
+const PUBLIC_OPERATION_PATH_PREFIXES = [
+  '/blog/posts/',
+];
 
 function buildServers(serverUrl) {
   const normalized = typeof serverUrl === 'string' && serverUrl.trim() ? serverUrl.trim() : '/';
@@ -29,6 +38,7 @@ function applyDefaultSecurity(spec) {
       if (!operation) continue;
       if (operation.security) continue;
       if (PUBLIC_OPERATION_PATHS.has(routePath)) continue;
+      if (PUBLIC_OPERATION_PATH_PREFIXES.some((p) => routePath.startsWith(p))) continue;
       operation.security = [{ bearerAuth: [] }];
     }
   }
@@ -148,9 +158,39 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             required: ['success'],
             properties: {
               success: { type: 'boolean' },
-              token: { type: 'string', description: 'JWT bearer token' },
+              token: { type: 'string', description: 'Short-lived (1h) JWT access token' },
+              refreshToken: {
+                type: 'string',
+                description: 'Long-lived (30d) opaque refresh token. Rotates on every /auth/refresh call.',
+              },
               userId: { type: 'string' },
+              expiresIn: { type: 'integer', description: 'Access token lifetime in seconds (default 3600).' },
               error: { type: 'string' },
+            },
+          },
+          RefreshRequest: {
+            type: 'object',
+            required: ['refreshToken'],
+            properties: {
+              refreshToken: { type: 'string', description: 'Opaque refresh token issued by /auth/login or a previous /auth/refresh.' },
+            },
+          },
+          RefreshResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              token: { type: 'string', description: 'New short-lived access JWT.' },
+              refreshToken: { type: 'string', description: 'New refresh token (the previous one is now revoked).' },
+              userId: { type: 'string' },
+              expiresIn: { type: 'integer' },
+            },
+          },
+          LogoutRequest: {
+            type: 'object',
+            required: ['refreshToken'],
+            properties: {
+              refreshToken: { type: 'string', description: 'Refresh token to revoke. Idempotent.' },
             },
           },
 
@@ -473,6 +513,223 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
               error: { type: 'string' },
             },
           },
+
+          // ----- Blog -------------------------------------------------------
+          BlogPostBase: {
+            type: 'object',
+            properties: {
+              slug: { type: 'string' },
+              title: { type: 'string' },
+              excerpt: { type: 'string' },
+              content: { type: 'string' },
+              coverImage: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              authorId: { type: 'string' },
+              status: { type: 'string', enum: ['draft', 'published', 'archived'] },
+              publishedAt: { type: 'string', format: 'date-time', nullable: true },
+              createdAt: { type: 'string', format: 'date-time' },
+              updatedAt: { type: 'string', format: 'date-time' },
+            },
+          },
+          BlogPostRequest: {
+            type: 'object',
+            required: ['title', 'content'],
+            properties: {
+              title: { type: 'string' },
+              content: { type: 'string' },
+              slug: { type: 'string', description: 'Auto-derived from title when omitted' },
+              excerpt: { type: 'string' },
+              coverImage: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              status: { type: 'string', enum: ['draft', 'published', 'archived'] },
+            },
+          },
+          BlogPostUpdateRequest: {
+            type: 'object',
+            description: 'Partial update. All fields optional.',
+            properties: {
+              title: { type: 'string' },
+              content: { type: 'string' },
+              slug: { type: 'string' },
+              excerpt: { type: 'string' },
+              coverImage: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              status: { type: 'string', enum: ['draft', 'published', 'archived'] },
+            },
+          },
+          BlogPostResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              post: { $ref: '#/components/schemas/BlogPostBase' },
+            },
+          },
+
+          // ----- Community / Events -----------------------------------------
+          EventBase: {
+            type: 'object',
+            properties: {
+              eventId: { type: 'string' },
+              slug: { type: 'string' },
+              title: { type: 'string' },
+              description: { type: 'string' },
+              eventType: { type: 'string', enum: ['event', 'hackathon', 'workshop', 'meetup'] },
+              location: { type: 'string' },
+              startsAt: { type: 'string', format: 'date-time' },
+              endsAt: { type: 'string', format: 'date-time', nullable: true },
+              capacity: { type: 'integer', description: '0 = unlimited' },
+              registeredCount: { type: 'integer' },
+              bannerImage: { type: 'string' },
+              status: { type: 'string', enum: ['draft', 'active', 'cancelled', 'ended'] },
+            },
+          },
+          EventRequest: {
+            type: 'object',
+            required: ['title', 'startsAt'],
+            properties: {
+              title: { type: 'string' },
+              description: { type: 'string' },
+              eventType: { type: 'string', enum: ['event', 'hackathon', 'workshop', 'meetup'] },
+              location: { type: 'string' },
+              startsAt: { type: 'string', format: 'date-time' },
+              endsAt: { type: 'string', format: 'date-time' },
+              capacity: { type: 'integer', minimum: 0 },
+              bannerImage: { type: 'string' },
+              status: { type: 'string', enum: ['draft', 'active', 'cancelled', 'ended'] },
+              slug: { type: 'string' },
+            },
+          },
+          EventResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              event: { $ref: '#/components/schemas/EventBase' },
+            },
+          },
+          EventListResponse: {
+            type: 'object',
+            required: ['success', 'events'],
+            properties: {
+              success: { type: 'boolean' },
+              events: { type: 'array', items: { $ref: '#/components/schemas/EventBase' } },
+              page: { type: 'integer' },
+              limit: { type: 'integer' },
+              total: { type: 'integer' },
+            },
+          },
+          EventRegisterResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              registered: { type: 'boolean' },
+              eventId: { type: 'string' },
+              userId: { type: 'string' },
+            },
+          },
+
+          // ----- Newsletter -------------------------------------------------
+          NewsletterSubscribeRequest: {
+            type: 'object',
+            required: ['email'],
+            properties: {
+              email: { type: 'string', format: 'email' },
+              source: { type: 'string' },
+            },
+          },
+          NewsletterSubscribeResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              subscriber: {
+                type: 'object',
+                properties: {
+                  email: { type: 'string' },
+                  status: { type: 'string', enum: ['active', 'unsubscribed'] },
+                  subscribedAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+
+          // ----- Support / Contact ------------------------------------------
+          ContactSubmitRequest: {
+            type: 'object',
+            required: ['name', 'email', 'subject', 'message'],
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              email: { type: 'string', format: 'email' },
+              subject: { type: 'string', minLength: 1 },
+              message: { type: 'string', minLength: 1 },
+              category: { type: 'string', enum: ['technical', 'account', 'billing', 'general'] },
+            },
+          },
+          SupportTicketResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              ticket: {
+                type: 'object',
+                properties: {
+                  ticketId: { type: 'string' },
+                  status: { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed'] },
+                  createdAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+
+          // ----- Banner -----------------------------------------------------
+          BannerUpdateRequest: {
+            type: 'object',
+            required: ['banner'],
+            properties: {
+              banner: { type: 'string', description: 'Base64 data URL (data:image/...)' },
+            },
+          },
+          BannerUpdateResponse: {
+            type: 'object',
+            required: ['success'],
+            properties: {
+              success: { type: 'boolean' },
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  username: { type: 'string' },
+                  banner: { type: 'string' },
+                },
+              },
+            },
+          },
+
+          // ----- Status -----------------------------------------------------
+          ServicesStatusResponse: {
+            type: 'object',
+            required: ['success', 'overall', 'services'],
+            properties: {
+              success: { type: 'boolean' },
+              overall: { type: 'string', enum: ['ok', 'degraded'] },
+              uptime: { type: 'integer', description: 'Process uptime in seconds' },
+              timestamp: { type: 'string', format: 'date-time' },
+              services: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    status: { type: 'string', enum: ['up', 'down', 'degraded'] },
+                    latencyMs: { type: 'integer', nullable: true },
+                    connections: { type: 'integer', nullable: true },
+                  },
+                },
+              },
+            },
+          },
         },
         responses: {
           HealthResponse: {
@@ -522,6 +779,11 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
         { name: 'Groups', description: 'Group management and MLS.' },
         { name: 'Calls', description: 'Voice/video call signaling.' },
         { name: 'Keys', description: 'Signal Protocol key material.' },
+        { name: 'Community', description: 'Community events and newsletter signups.' },
+        { name: 'Blog', description: 'Public blog post reads.' },
+        { name: 'Admin', description: 'Administrative content management. Requires admin role.' },
+        { name: 'Support', description: 'Public contact / support ticket submission.' },
+        { name: 'Status', description: 'Service health and uptime snapshots.' },
       ],
     },
     apis: [path.join(__dirname, '../interfaces/http/routes/**/*.js')],
