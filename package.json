@@ -32,6 +32,7 @@
     "vite": "^5.4.11"
   },
   "devDependencies": {
-    "standard-version": "^9.5.0"
+    "standard-version": "^9.5.0",
+    "supertest": "^7.2.2"
   }
 }
