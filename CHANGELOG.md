@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.2.2](https://github.com/echo-chat-protocol/echo-backend/compare/v1.2.1...v1.2.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **auth:** harden secret injection and validate userId in logout ([f5b5330](https://github.com/echo-chat-protocol/echo-backend/commit/f5b53306381aaa9f74b4ec9c386b562ed15981c3))
+
 ### [1.2.1](https://github.com/echo-chat-protocol/echo-backend/compare/v1.2.0...v1.2.1) (2026-05-17)
 
 
