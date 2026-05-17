@@ -1,21 +1,26 @@
-const path = require('path');
-const fs = require('fs');
+const { persistImageDataUrl } = require('./imageStorage');
+const {
+  PROFILE_PICTURE_MAX_SIZE,
+  PROFILE_PICTURE_MIME_TYPES,
+} = require('../../../shared/constants');
 
 /**
- * Persists a base64 profile image in the uploads folder and returns a public URL.
- * @param {string} base64Image
+ * Persists a base64 profile picture and returns its public URL. Delegates
+ * to the shared `persistImageDataUrl` helper which validates MIME, enforces
+ * size limits, picks the correct extension, and writes asynchronously.
+ *
+ * @param {string} base64Image - data URL `data:image/<png|jpeg|webp>;base64,...`
  * @param {string} userId
+ * @returns {Promise<string>}
  */
 async function saveProfilePicture(base64Image, userId) {
-  const uploadDir = path.join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-  }
-  const filename = `${userId}-${Date.now()}.png`;
-  const filePath = path.join(uploadDir, filename);
-  const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
-  fs.writeFileSync(filePath, base64Data, { encoding: 'base64' });
-  return `/uploads/${filename}`;
+  return persistImageDataUrl({
+    dataUrl: base64Image,
+    allowedMimeTypes: PROFILE_PICTURE_MIME_TYPES,
+    maxSize: PROFILE_PICTURE_MAX_SIZE,
+    filenamePrefix: 'profile',
+    userId,
+  });
 }
 
 module.exports = { saveProfilePicture };
