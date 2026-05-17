@@ -103,7 +103,7 @@ function registerPresenceSocketHandlers({ socket, io, userSocketMap, Message, Us
       }).sort({ createdAt: 1 });
 
       console.log(`Sending ${message.length} messages to User ${authedUserId} ↔ ${targetUserId}`);
-      io.to(room).emit('newMessage', message);
+      socket.emit('newMessage', message);
     } catch (err) {
       console.error('Error fetching messages:', err);
     }
