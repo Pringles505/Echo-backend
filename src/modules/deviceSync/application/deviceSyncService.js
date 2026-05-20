@@ -42,10 +42,13 @@ function publicView(doc) {
     totalPayloadBytes: doc.totalPayloadBytes || 0,
     sourceDevice: doc.sourceDevice || null,
     targetDevice: doc.targetDevice || null,
+    targetDeviceIdentityPubX25519: doc.targetDeviceIdentityPubX25519 || null,
+    targetDeviceIdentityPubEd25519: doc.targetDeviceIdentityPubEd25519 || null,
+    deviceAuthorizationSignature: doc.deviceAuthorizationSignature || null,
   };
 }
 
-function createDeviceSyncService({ DeviceSyncSession, User, authService, limits = {} }) {
+function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authService, limits = {} }) {
   const ttlMs = Math.min(Math.max(limits.ttlMs || DEFAULT_TTL_MS, 10_000), MAX_TTL_MS);
   const maxChunkSize = limits.maxChunkSize || MAX_CHUNK_SIZE;
   const maxChunkCount = limits.maxChunkCount || MAX_CHUNK_COUNT;
@@ -57,14 +60,19 @@ function createDeviceSyncService({ DeviceSyncSession, User, authService, limits 
     if (!session) {
       throw new NotFoundError('Sync session not found', 'sync_session_not_found');
     }
+    // Check terminal statuses before the TTL so a completed session always
+    // returns sync_session_completed even if the wall-clock TTL has since passed.
+    if (session.status === 'completed') {
+      throw new ConflictError('Sync session already completed', 'sync_session_completed');
+    }
+    if (session.status === 'cancelled') {
+      throw new ConflictError('Sync session is no longer active', 'sync_session_inactive');
+    }
     if (session.expiresAt && new Date(session.expiresAt).getTime() <= Date.now()) {
       session.status = 'expired';
       throw new ConflictError('Sync session expired', 'sync_session_expired');
     }
-    if (session.status === 'completed') {
-      throw new ConflictError('Sync session already completed', 'sync_session_completed');
-    }
-    if (session.status === 'cancelled' || session.status === 'expired') {
+    if (session.status === 'expired') {
       throw new ConflictError('Sync session is no longer active', 'sync_session_inactive');
     }
   }
@@ -88,7 +96,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, authService, limits 
   return {
     limits: { ttlMs, maxChunkSize, maxChunkCount, maxTotalBytes },
 
-    async createSession({ targetEphemeralPubKey, sessionCode, origin = null, version = null, targetDevice = {} }) {
+    async createSession({ targetEphemeralPubKey, sessionCode, origin = null, version = null, targetDevice = {}, sourceUserId = null }) {
       if (!targetEphemeralPubKey) {
         throw new BadRequestError('Missing targetEphemeralPubKey', 'missing_target_ephemeral_key');
       }
@@ -107,6 +115,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, authService, limits 
         origin,
         version,
         targetDevice,
+        ...(sourceUserId ? { sourceUserId } : {}),
       });
 
       return {
@@ -402,9 +411,25 @@ function createDeviceSyncService({ DeviceSyncSession, User, authService, limits 
         timezone: targetDevice.timezone || null,
         requestMetadata,
         provisionedVia: 'device-sync',
+        // QR sync completion is the primary user's explicit re-authorization,
+        // so a previously revoked record for the same deviceId is brought back.
+        allowReenable: true,
       });
 
       const resolvedDeviceId = deviceRecord?.deviceId || deviceId;
+
+      // Persist the source's deviceAuthorizationSignature directly onto the
+      // Device record. The sync session is the only place that holds it, and
+      // sessions get garbage-collected — without this copy, a synced device
+      // whose bundle upload races or fails leaves an unsigned device record
+      // and peers reject every message it sends.
+      if (Device && session.deviceAuthorizationSignature) {
+        await Device.updateOne(
+          { deviceId: resolvedDeviceId },
+          { $set: { deviceAuthorizationSignature: session.deviceAuthorizationSignature } }
+        );
+      }
+
       session.targetDevice = { ...session.targetDevice, deviceId: resolvedDeviceId, platform, deviceName };
       session.completedAt = new Date();
       session.status = 'completed';
@@ -423,6 +448,49 @@ function createDeviceSyncService({ DeviceSyncSession, User, authService, limits 
         auth: authResult,
         user: { userId: user.id, username: user.username },
       };
+    },
+
+    // Target publishes the IK_pub of the new device it is provisioning so the
+    // source can sign deviceAuthorizationSignature over it. No private key
+    // material is ever transmitted to the server.
+    async submitTargetDeviceIdentity({ sessionId, targetAccessToken, pubX25519, pubEd25519 }) {
+      if (typeof pubX25519 !== 'string' || pubX25519.length === 0) {
+        throw new BadRequestError('Missing targetDeviceIdentityPubX25519', 'missing_target_device_identity_x25519');
+      }
+      if (typeof pubEd25519 !== 'string' || pubEd25519.length === 0) {
+        throw new BadRequestError('Missing targetDeviceIdentityPubEd25519', 'missing_target_device_identity_ed25519');
+      }
+      const session = await requireTargetSession(sessionId, targetAccessToken);
+      // Once recorded the pub is treated as fixed for the lifetime of the
+      // session — re-uploading a different IK would let the source's auth_sig
+      // bind a different key than what the bundle is published under.
+      if (session.targetDeviceIdentityPubX25519 && session.targetDeviceIdentityPubX25519 !== pubX25519) {
+        throw new ConflictError('Target device IK already set for this session', 'target_device_identity_locked');
+      }
+      session.targetDeviceIdentityPubX25519 = pubX25519;
+      session.targetDeviceIdentityPubEd25519 = pubEd25519;
+      await session.save();
+      return publicView(session);
+    },
+
+    // Source (authenticated as the bound sourceUserId) uploads the XEdDSA
+    // signature over the target's IK_pub computed under the source's account
+    // identity key. The signature value alone is a public artefact.
+    async submitDeviceAuthorization({ sessionId, userId, deviceAuthorizationSignature }) {
+      if (typeof deviceAuthorizationSignature !== 'string' || deviceAuthorizationSignature.length === 0) {
+        throw new BadRequestError('Missing deviceAuthorizationSignature', 'missing_device_authorization_signature');
+      }
+      const session = await loadSessionById(sessionId);
+      ensureNotExpired(session);
+      if (!session.sourceUserId || session.sourceUserId !== userId) {
+        throw new ForbiddenError('Only the bound source user may sign the device authorization', 'sync_session_forbidden');
+      }
+      if (!session.targetDeviceIdentityPubX25519) {
+        throw new ConflictError('Target device identity has not been submitted yet', 'target_device_identity_missing');
+      }
+      session.deviceAuthorizationSignature = deviceAuthorizationSignature;
+      await session.save();
+      return publicView(session);
     },
 
     async cancel({ sessionId, userId = null, targetAccessToken = null }) {

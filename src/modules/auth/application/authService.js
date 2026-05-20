@@ -95,6 +95,15 @@ function metadataSet(input = {}, requestMetadata = {}) {
   return Object.fromEntries(Object.entries(metadata).filter(([, value]) => value != null));
 }
 
+async function nextSecondaryDeviceUserId(Device, User, mainUserId) {
+  const digits = customAlphabet('0123456789', 8);
+  let candidate = `${mainUserId}_${digits()}`;
+  while (await Device.exists({ deviceUserId: candidate }) || await User.exists({ id: candidate })) {
+    candidate = `${mainUserId}_${digits()}`;
+  }
+  return candidate;
+}
+
 function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysPayload, OPK_MAX_STORED }) {
   return {
     /**
@@ -129,7 +138,7 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
       await user.save();
 
       if (Device && deviceId) {
-        const primaryDeviceUserId = `${username}_primary`;
+        const primaryDeviceUserId = id;
         try {
           await Device.create({
             deviceId,
@@ -150,7 +159,7 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
           await user.deleteOne().catch(() => {});
           throw deviceErr;
         }
-        await User.updateOne({ id }, { $addToSet: { devices: deviceId } });
+        await User.updateOne({ id }, { $addToSet: { devices: primaryDeviceUserId } });
         return { userId: id, deviceId, deviceUserId: primaryDeviceUserId };
       }
 
@@ -159,6 +168,12 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
 
     /**
      * Authenticate user and generate JWT token.
+     *
+     * A device can only obtain a session through registration (which creates
+     * its primary Device row) or by pairing/syncing with an existing account.
+     * Password login is therefore restricted to devices that are already
+     * registered for the target user and have not been revoked.
+     *
      * @param {LoginInput} input
      * @returns {Promise<LoginResult>}
      */
@@ -169,30 +184,63 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
       const isMatch = await bcrypt.compare(password, user.hashedPassword);
       if (!isMatch) return { success: false, error: 'Invalid username or password' };
 
-      let deviceRecord = null;
-      if (Device && deviceId) {
-        deviceRecord = await this.upsertDeviceRecord({
-          userId: user.id,
-          deviceId,
-          deviceName,
-          platform,
-          userAgent,
-          locale,
-          timezone,
-          requestMetadata,
-          provisionedVia: 'device-sync',
-        });
+      if (!Device) {
+        return { success: false, error: 'Device registration is required', code: 'device_required' };
+      }
+      if (!deviceId) {
+        return {
+          success: false,
+          error: 'This device is not paired with the account. Sync it from an existing device first.',
+          code: 'device_required',
+        };
       }
 
-      const payload = { id: user.id, username: user.username };
-      const resolvedDeviceId = deviceRecord?.deviceId || deviceId || null;
-      if (resolvedDeviceId) payload.deviceId = resolvedDeviceId;
-      if (deviceRecord?.deviceUserId) payload.deviceUserId = deviceRecord.deviceUserId;
+      const device = await Device.findOne({ deviceId }).lean();
+      if (!device) {
+        return {
+          success: false,
+          error: 'This device is not paired with the account. Sync it from an existing device first.',
+          code: 'device_not_registered',
+        };
+      }
+      if (String(device.parentUserId) !== String(user.id)) {
+        return {
+          success: false,
+          error: 'This device belongs to a different account.',
+          code: 'device_forbidden',
+        };
+      }
+      if (device.isRevoked) {
+        return {
+          success: false,
+          error: 'This device has been revoked. Sync it again from an authorized device to restore access.',
+          code: 'device_revoked',
+        };
+      }
+
+      // Refresh metadata + lastSeen, but never re-enable a revoked record here.
+      await Device.updateOne(
+        { deviceId },
+        { $set: { ...metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata), lastSeen: new Date() } }
+      );
+
+      const payload = {
+        id: user.id,
+        username: user.username,
+        deviceId,
+        deviceUserId: device.deviceUserId,
+      };
       if (platform) payload.platform = platform;
 
       const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
 
-      return { success: true, token, userId: user.id, deviceId: resolvedDeviceId, deviceUserId: deviceRecord?.deviceUserId || null };
+      return {
+        success: true,
+        token,
+        userId: user.id,
+        deviceId,
+        deviceUserId: device.deviceUserId,
+      };
     },
 
     issueDeviceJwt({ userId, username, deviceId, deviceUserId, platform }) {
@@ -203,14 +251,23 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
       return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
     },
 
-    async upsertDeviceRecord({ userId, deviceId, deviceName, platform, userAgent, locale, timezone, requestMetadata, provisionedVia }) {
+    async upsertDeviceRecord({ userId, deviceId, deviceName, platform, userAgent, locale, timezone, requestMetadata, provisionedVia, allowReenable = false }) {
       if (!Device) return null;
       const user = await User.findOne({ id: userId }).lean();
       if (!user) return null;
       let resolvedDeviceId = deviceId;
       let existing = await Device.findOne({ deviceId: resolvedDeviceId });
       if (existing) {
+        // A deviceId already owned by a different user must get a fresh id —
+        // we never let one user's device record alias another's.
         if (String(existing.parentUserId) !== String(userId)) {
+          const nanoid = customAlphabet('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 24);
+          resolvedDeviceId = `device-${nanoid()}`;
+          existing = null;
+        } else if (existing.isRevoked && !allowReenable) {
+          // Same user, but the device was kicked. Caller is not the QR sync
+          // flow, so we refuse to silently re-enable; assign a fresh deviceId
+          // for the new context instead of bringing the revoked record back.
           const nanoid = customAlphabet('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 24);
           resolvedDeviceId = `device-${nanoid()}`;
           existing = null;
@@ -219,17 +276,15 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
 
       if (existing) {
         existing.lastSeen = new Date();
+        if (existing.isRevoked && allowReenable) {
+          existing.isRevoked = false;
+        }
         Object.assign(existing, metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata));
         await existing.save();
-        await User.updateOne({ id: userId }, { $addToSet: { devices: resolvedDeviceId } });
+        await User.updateOne({ id: userId }, { $addToSet: { devices: existing.deviceUserId } });
         return { deviceId: resolvedDeviceId, deviceUserId: existing.deviceUserId, created: false };
       }
-      const secondaryCount = await Device.countDocuments({
-        parentUserId: userId,
-        isPrimary: false,
-        isRevoked: false,
-      });
-      const deviceUserId = `${user.username}_x${secondaryCount + 1}`;
+      const deviceUserId = await nextSecondaryDeviceUserId(Device, User, user.id);
       await Device.create({
         deviceId: resolvedDeviceId,
         parentUserId: userId,
@@ -241,7 +296,7 @@ function createAuthService({ User, Device, bcrypt, jwt, normalizeOneTimePreKeysP
         provisionedVia: provisionedVia || 'device-sync',
         lastSeen: new Date(),
       });
-      await User.updateOne({ id: userId }, { $addToSet: { devices: resolvedDeviceId } });
+      await User.updateOne({ id: userId }, { $addToSet: { devices: deviceUserId } });
       return { deviceId: resolvedDeviceId, deviceUserId, created: true };
     },
   };

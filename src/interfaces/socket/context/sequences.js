@@ -1,11 +1,22 @@
 /**
  * Build a stable key for a direct conversation.
+ *
+ * Account-level (legacy single-device) sessions key by `{userA}_{userB}`
+ * with the user ids sorted. Per-device fanout sessions key by
+ * `{userA@devA}_{userB@devB}` so multi-device sends don't race each
+ * other's messageNumber sequences. When only one side has a deviceId
+ * (mixed primary/secondary), the missing side falls back to its bare
+ * user id so the key is still deterministic.
+ *
  * @param {string} userA
  * @param {string} userB
+ * @param {{ devA?: string|null, devB?: string|null }} [deviceIds]
  * @returns {string}
  */
-function makeConversationKey(userA, userB) {
-  return [String(userA ?? ''), String(userB ?? '')].sort().join('_');
+function makeConversationKey(userA, userB, deviceIds = {}) {
+  const sideA = deviceIds?.devA ? `${String(userA ?? '')}@${String(deviceIds.devA)}` : String(userA ?? '');
+  const sideB = deviceIds?.devB ? `${String(userB ?? '')}@${String(deviceIds.devB)}` : String(userB ?? '');
+  return [sideA, sideB].sort().join('_');
 }
 
 /**

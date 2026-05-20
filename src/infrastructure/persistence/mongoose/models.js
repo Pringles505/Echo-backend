@@ -38,6 +38,14 @@ function createModels(mongoose) {
     publicEphemeralKey: String,
     spkId: { type: mongoose.Schema.Types.Mixed, default: null },
     opkId: { type: String, default: null },
+    // Per-device fanout: when set, the message was encrypted with the
+    // sender's device IK against the recipient's specific device bundle.
+    // Receivers other than `peerDeviceId` must ignore the event.
+    senderDeviceId: { type: String, default: null },
+    peerDeviceId: { type: String, default: null },
+    senderDeviceUserId: { type: String, default: null },
+    peerDeviceUserId: { type: String, default: null },
+    conversationUserId: { type: String, default: null },
     seenStatus: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },
     messageType: {
@@ -239,6 +247,11 @@ function createModels(mongoose) {
     targetConfirmed: { type: Boolean, default: false },
     sourceDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
     targetDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // Per-device IK published by the target during Phase 1 so the source can
+    // sign deviceAuthorizationSignature over it; never contains private material.
+    targetDeviceIdentityPubX25519: { type: String, default: null },
+    targetDeviceIdentityPubEd25519: { type: String, default: null },
+    deviceAuthorizationSignature: { type: String, default: null },
     chunks: [
       {
         index: Number,

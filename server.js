@@ -133,14 +133,14 @@ const authService = createAuthService({
 });
 
 const pairingService = createPairingService({ PairingSession, Device, User, authService });
-const deviceManagementService = createDeviceManagementService({ Device, MessageEnvelope, User });
-const deviceSyncService = createDeviceSyncService({ DeviceSyncSession, User, authService });
+const deviceManagementService = createDeviceManagementService({ Device, MessageEnvelope, User, io });
+const deviceSyncService = createDeviceSyncService({ DeviceSyncSession, User, Device, authService });
 
 const sequenceService = createSequenceService({ Message, MessageSequence, GroupSequence });
 const callEventService = createCallEventService({ io, userSocketMap, Call, Message, User });
 const opkLimiter = createOpkLimiterService(OpkRequestLog);
 const notifier = createSocketNotifier({ io, userSocketMap });
-const { requireAuth, optionalAuth } = createAuthMiddleware({ jwt });
+const { requireAuth, optionalAuth } = createAuthMiddleware({ jwt, Device });
 
 const opkPolicyDeps = {
   OPK_MAX_STORED,
@@ -222,7 +222,7 @@ const keysRouter = pickRouter(keysRouteModule, 'createKeysRouter', 'keysRouter')
 const pairingRouter = createPairingRouter({ pairingService, mongoose, requireAuth });
 const devicesRouter = createDevicesRouter({ deviceManagementService, mongoose, requireAuth });
 const envelopesRouter = createEnvelopesRouter({ deviceManagementService, mongoose, requireAuth });
-const syncRouter = createSyncRouter({ deviceSyncService, mongoose, requireAuth });
+const syncRouter = createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAuth });
 
 const mountHttpRoutes = (target) => {
   target.use(healthRouter);
@@ -275,9 +275,22 @@ const authenticate = (socket, next) => {
     return next(new Error('unauthorized'));
   }
 
-  jwt.verify(token.trim(), process.env.JWT_SECRET, (err, decoded) => {
+  jwt.verify(token.trim(), process.env.JWT_SECRET, async (err, decoded) => {
     if (err) return next(new Error('unauthorized'));
     if (!decoded?.id) return next(new Error('unauthorized'));
+
+    if (decoded.deviceId) {
+      try {
+        const device = await Device.findOne({ deviceId: decoded.deviceId }).lean();
+        if (!device) return next(new Error('device_not_registered'));
+        if (device.isRevoked) return next(new Error('device_revoked'));
+        if (String(device.parentUserId) !== String(decoded.id)) {
+          return next(new Error('device_forbidden'));
+        }
+      } catch {
+        return next(new Error('unauthorized'));
+      }
+    }
 
     userSocketMap[decoded.id] = socket.id;
     socket.user = decoded;

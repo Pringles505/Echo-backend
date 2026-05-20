@@ -2,7 +2,7 @@ const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 
-function createSyncRouter({ deviceSyncService, mongoose, requireAuth, syncCreateLimiter, syncAttachLimiter } = {}) {
+function createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAuth, syncCreateLimiter, syncAttachLimiter } = {}) {
   if (!deviceSyncService) throw new Error('createSyncRouter requires deviceSyncService');
   if (!mongoose) throw new Error('createSyncRouter requires mongoose');
   if (typeof requireAuth !== 'function') throw new Error('createSyncRouter requires requireAuth');
@@ -32,6 +32,7 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, syncCreate
     '/sync/create-session',
     createLimit,
     dbGuard,
+    typeof optionalAuth === 'function' ? optionalAuth : (_req, _res, next) => next(),
     validateBody([
       { field: 'targetEphemeralPubKey', type: 'string' },
       { field: 'sessionCode', type: 'string', required: false },
@@ -41,7 +42,10 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, syncCreate
     ]),
     async (req, res, next) => {
       try {
-        const result = await deviceSyncService.createSession(req.body || {});
+        const result = await deviceSyncService.createSession({
+          ...(req.body || {}),
+          sourceUserId: req.user?.id || null,
+        });
         return res.status(201).json({ success: true, ...result });
       } catch (err) {
         return handleError(res, next, err);
@@ -126,6 +130,59 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, syncCreate
           sourceEphemeralPubKey: req.body.sourceEphemeralPubKey,
           sourceUserId: req.user.id,
           sourceDevice: req.body.sourceDevice || {},
+        });
+        return res.json({ success: true, session });
+      } catch (err) {
+        return handleError(res, next, err);
+      }
+    }
+  );
+
+  // Target uploads the IK_pub of the device it is provisioning. The source
+  // will sign deviceAuthorizationSignature over this pub. Public key only —
+  // a missing/blank private value is not accepted because the schema fields
+  // are strictly public.
+  router.post(
+    '/sync/dh-target-identity',
+    dbGuard,
+    validateBody([
+      { field: 'sessionId', type: 'string' },
+      { field: 'targetAccessToken', type: 'string' },
+      { field: 'targetDeviceIdentityPubX25519', type: 'string' },
+      { field: 'targetDeviceIdentityPubEd25519', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const session = await deviceSyncService.submitTargetDeviceIdentity({
+          sessionId: req.body.sessionId,
+          targetAccessToken: req.body.targetAccessToken,
+          pubX25519: req.body.targetDeviceIdentityPubX25519,
+          pubEd25519: req.body.targetDeviceIdentityPubEd25519,
+        });
+        return res.json({ success: true, session });
+      } catch (err) {
+        return handleError(res, next, err);
+      }
+    }
+  );
+
+  // Source signs the target's IK_pub under its account identity key and
+  // uploads the resulting XEdDSA signature. Authenticated — only the source
+  // user bound to the session may submit.
+  router.post(
+    '/sync/dh-auth-sig',
+    dbGuard,
+    requireAuth,
+    validateBody([
+      { field: 'sessionId', type: 'string' },
+      { field: 'deviceAuthorizationSignature', type: 'string' },
+    ]),
+    async (req, res, next) => {
+      try {
+        const session = await deviceSyncService.submitDeviceAuthorization({
+          sessionId: req.body.sessionId,
+          userId: req.user.id,
+          deviceAuthorizationSignature: req.body.deviceAuthorizationSignature,
         });
         return res.json({ success: true, session });
       } catch (err) {

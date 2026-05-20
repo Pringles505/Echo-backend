@@ -45,6 +45,19 @@ function createDevicesRouter({ deviceManagementService, mongoose, requireAuth } 
     }
   });
 
+  // Identity-only lookup (no OPK consumption). Used by the X3DH responder
+  // to fetch the sender device's IK_pub by deviceId.
+  router.get('/users/:userId/devices/identities', requireAuth, dbGuard, async (req, res, next) => {
+    try {
+      const identities = await deviceManagementService.getDeviceIdentities({
+        parentUserId: req.params.userId,
+      });
+      return res.json({ success: true, identities });
+    } catch (err) {
+      return handleError(res, next, err);
+    }
+  });
+
   // Upload or replace a device's public key bundle after provisioning
   router.post(
     '/devices/:deviceId/keys',
