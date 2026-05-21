@@ -60,8 +60,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
     if (!session) {
       throw new NotFoundError('Sync session not found', 'sync_session_not_found');
     }
-    // Check terminal statuses before the TTL so a completed session always
-    // returns sync_session_completed even if the wall-clock TTL has since passed.
+    // Check terminal statuses before TTL so completed stays completed.
     if (session.status === 'completed') {
       throw new ConflictError('Sync session already completed', 'sync_session_completed');
     }
@@ -354,7 +353,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
     async complete({ sessionId, actor, userId = null, targetAccessToken = null, targetDevice = {}, requestMetadata = {} }) {
       if (actor === 'source') {
         const session = await loadSessionById(sessionId);
-        // Source completion is a best-effort marker; allow it even if target already completed.
+        // Allow source completion even if target already completed.
         if (!session) throw new NotFoundError('Sync session not found', 'sync_session_not_found');
         if (session.status === 'cancelled' || session.status === 'expired') {
           throw new ConflictError('Sync session is no longer active', 'sync_session_inactive');
@@ -418,11 +417,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
 
       const resolvedDeviceId = deviceRecord?.deviceId || deviceId;
 
-      // Persist the source's deviceAuthorizationSignature directly onto the
-      // Device record. The sync session is the only place that holds it, and
-      // sessions get garbage-collected — without this copy, a synced device
-      // whose bundle upload races or fails leaves an unsigned device record
-      // and peers reject every message it sends.
+      // Copy the authorization signature to the Device record to avoid loss.
       if (Device && session.deviceAuthorizationSignature) {
         await Device.updateOne(
           { deviceId: resolvedDeviceId },
@@ -450,9 +445,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
       };
     },
 
-    // Target publishes the IK_pub of the new device it is provisioning so the
-    // source can sign deviceAuthorizationSignature over it. No private key
-    // material is ever transmitted to the server.
+    // Target uploads the device IK public keys. No private keys.
     async submitTargetDeviceIdentity({ sessionId, targetAccessToken, pubX25519, pubEd25519 }) {
       if (typeof pubX25519 !== 'string' || pubX25519.length === 0) {
         throw new BadRequestError('Missing targetDeviceIdentityPubX25519', 'missing_target_device_identity_x25519');
@@ -461,9 +454,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
         throw new BadRequestError('Missing targetDeviceIdentityPubEd25519', 'missing_target_device_identity_ed25519');
       }
       const session = await requireTargetSession(sessionId, targetAccessToken);
-      // Once recorded the pub is treated as fixed for the lifetime of the
-      // session — re-uploading a different IK would let the source's auth_sig
-      // bind a different key than what the bundle is published under.
+      // Do not allow a different IK to replace an existing one in the session.
       if (session.targetDeviceIdentityPubX25519 && session.targetDeviceIdentityPubX25519 !== pubX25519) {
         throw new ConflictError('Target device IK already set for this session', 'target_device_identity_locked');
       }
@@ -473,9 +464,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
       return publicView(session);
     },
 
-    // Source (authenticated as the bound sourceUserId) uploads the XEdDSA
-    // signature over the target's IK_pub computed under the source's account
-    // identity key. The signature value alone is a public artefact.
+    // Source uploads the signature over the target IK public key.
     async submitDeviceAuthorization({ sessionId, userId, deviceAuthorizationSignature }) {
       if (typeof deviceAuthorizationSignature !== 'string' || deviceAuthorizationSignature.length === 0) {
         throw new BadRequestError('Missing deviceAuthorizationSignature', 'missing_device_authorization_signature');

@@ -138,10 +138,7 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAu
     }
   );
 
-  // Target uploads the IK_pub of the device it is provisioning. The source
-  // will sign deviceAuthorizationSignature over this pub. Public key only —
-  // a missing/blank private value is not accepted because the schema fields
-  // are strictly public.
+  // Target uploads the device IK public key. No private keys.
   router.post(
     '/sync/dh-target-identity',
     dbGuard,
@@ -166,9 +163,7 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAu
     }
   );
 
-  // Source signs the target's IK_pub under its account identity key and
-  // uploads the resulting XEdDSA signature. Authenticated — only the source
-  // user bound to the session may submit.
+  // Source uploads the authorization signature over target IK.
   router.post(
     '/sync/dh-auth-sig',
     dbGuard,

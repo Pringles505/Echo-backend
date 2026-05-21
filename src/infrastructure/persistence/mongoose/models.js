@@ -249,8 +249,7 @@ function createModels(mongoose) {
     targetConfirmed: { type: Boolean, default: false },
     sourceDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
     targetDevice: { type: mongoose.Schema.Types.Mixed, default: {} },
-    // Per-device IK published by the target during Phase 1 so the source can
-    // sign deviceAuthorizationSignature over it; never contains private material.
+    // Target device public IK (no private material).
     targetDeviceIdentityPubX25519: { type: String, default: null },
     targetDeviceIdentityPubEd25519: { type: String, default: null },
     deviceAuthorizationSignature: { type: String, default: null },
