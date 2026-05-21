@@ -41,12 +41,18 @@ const OPK_BUNDLE_LIMITS = {
 // ============================================================================
 
 /** Allowed origins for CORS requests */
+const CORS_EXTRA_ORIGINS = (process.env.CORS_EXTRA_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const CORS_ORIGINS = process.env.NODE_ENV === 'production'
   ? [
     'https://chat-tuah-frontend.vercel.app',
     'tauri://localhost',
     'http://tauri.localhost',
     'https://tauri.localhost',
+    ...CORS_EXTRA_ORIGINS,
   ]
   : true; // Allow all origins in development (LAN phones, Vite proxy, etc.)
 
