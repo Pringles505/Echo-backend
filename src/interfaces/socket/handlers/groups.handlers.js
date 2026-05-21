@@ -39,7 +39,6 @@ const { customAlphabet } = require('nanoid');
  * @param {object} deps - Handler dependencies
  * @param {*} deps.socket - Socket.IO socket instance
  * @param {*} deps.io - Socket.IO server instance
- * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
  * @param {import('mongoose').Model} deps.Message - Message model
  * @param {import('mongoose').Model} deps.User - User model
  * @param {import('mongoose').Model} deps.Group - Group model
@@ -52,7 +51,6 @@ function registerGroupsSocketHandlers(deps) {
   const {
     socket,
     io,
-    userSocketMap,
     Message,
     User,
     Group,
@@ -71,9 +69,7 @@ function registerGroupsSocketHandlers(deps) {
     for (const member of members) {
       const memberId = String(member?.userId ?? '');
       if (!memberId || exclude.has(memberId)) continue;
-      const memberSocketId = userSocketMap[memberId];
-      if (!memberSocketId) continue;
-      io.to(memberSocketId).emit(eventName, payload);
+      io.to(memberId).emit(eventName, payload);
       deliveredCount += 1;
     }
     return deliveredCount;
@@ -204,8 +200,8 @@ function registerGroupsSocketHandlers(deps) {
     if (normalizedMemberIds.length === 0) return cb?.({ success: false, error: 'At least one member is required' });
 
     const emitToUser = (targetUserId, eventName, payload) => {
-      const socketId = userSocketMap[String(targetUserId)];
-      if (socketId) io.to(socketId).emit(eventName, payload);
+      const targetUserIdStr = String(targetUserId ?? '');
+      if (targetUserIdStr) io.to(targetUserIdStr).emit(eventName, payload);
     };
 
     const nowIso = new Date().toISOString();
@@ -414,16 +410,13 @@ function registerGroupsSocketHandlers(deps) {
 
       const nowIso = new Date().toISOString();
       const room = `group:${groupIdStr}`;
-      const memberSocketId = userSocketMap[memberIdStr];
-      if (memberSocketId) {
-        io.to(memberSocketId).emit('groupAdded', {
-          groupId: groupIdStr,
-          name: group.name,
-          addedByUserId: String(authedUserId),
-          role: 'member',
-          at: nowIso,
-        });
-      }
+      io.to(memberIdStr).emit('groupAdded', {
+        groupId: groupIdStr,
+        name: group.name,
+        addedByUserId: String(authedUserId),
+        role: 'member',
+        at: nowIso,
+      });
 
       io.to(room).emit('groupMemberAdded', {
         groupId: groupIdStr,
@@ -480,12 +473,8 @@ function registerGroupsSocketHandlers(deps) {
       } else {
         // Non-MLS groups or self-leave: complete immediately.
         await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
-        const memberSocketId = userSocketMap[memberIdStr];
-        if (memberSocketId) {
-          const memberSocket = io.sockets.sockets.get(memberSocketId);
-          if (memberSocket) memberSocket.leave(room);
-          io.to(memberSocketId).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
-        }
+        io.in(memberIdStr).socketsLeave(room);
+        io.to(memberIdStr).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
@@ -621,12 +610,8 @@ function registerGroupsSocketHandlers(deps) {
       const members = await GroupMember.find({ groupId: groupIdStr }, { userId: 1 }).lean();
       for (const m of members) {
         const memberId = String(m?.userId ?? '');
-        const memberSocketId = userSocketMap[memberId];
-        if (!memberSocketId) continue;
-        const memberSocket = io.sockets.sockets.get(memberSocketId);
-        if (!memberSocket || !memberSocket.rooms?.has(room)) {
-          io.to(memberSocketId).emit('newGroupMessage', messageWithProfile);
-        }
+        if (!memberId) continue;
+        io.to(memberId).except(room).emit('newGroupMessage', messageWithProfile);
       }
 
       ack({ success: true, seq });
@@ -677,11 +662,10 @@ function registerGroupsSocketHandlers(deps) {
         artifact: welcome,
       });
 
-      const recipientSocketId = userSocketMap[recipientUserIdStr];
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('groupWelcome', { groupId: groupIdStr, welcome });
-      }
-      return cb?.({ success: true, delivered: Boolean(recipientSocketId) });
+      // Broadcast to the user's entire socket room so all their devices receive it.
+      // Each device filters by welcome.recipientClientId to decide whether to process.
+      io.to(recipientUserIdStr).emit('groupWelcome', { groupId: groupIdStr, welcome });
+      return cb?.({ success: true, delivered: true });
     } catch (err) {
       console.error('Error sending group welcome:', err);
       cb?.({ success: false, error: 'Internal server error' });
@@ -843,6 +827,33 @@ function registerGroupsSocketHandlers(deps) {
     }
   });
 
+  // Return ALL key packages for a user (one per device/clientId).
+  // Used by group creators to add each device as a separate MLS leaf.
+  socket.on('fetchAllKeyPackages', async ({ userId: targetId }, cb) => {
+    const callerId = socket.user?.id;
+    if (!callerId) return cb?.({ success: false, error: 'unauthorized' });
+    try {
+      const userIdStr = String(targetId ?? '');
+      const packages = await KeyPackage.find({ userId: userIdStr, consumed: false })
+        .sort({ createdAt: 1 })
+        .lean();
+      const result = packages.length > 0
+        ? packages
+        : await KeyPackage.find({ userId: userIdStr }).sort({ createdAt: 1 }).lean();
+      cb?.({
+        success: true,
+        packages: result.map((kp) => ({
+          clientId: kp.clientId ?? null,
+          initKeyB64: kp.initKeyB64 ?? null,
+          keyPackage: kp.keyPackage ?? null,
+        })),
+      });
+    } catch (err) {
+      console.error('fetchAllKeyPackages error:', err);
+      cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
   // Clients send a proposal before committing in MLS groups.
   // Server stores it opaquely and broadcasts to all group members.
   socket.on('sendGroupProposal', async ({ groupId, proposal }, cb) => {
@@ -933,12 +944,8 @@ function registerGroupsSocketHandlers(deps) {
         );
         const room = `group:${groupIdStr}`;
         const nowIso = new Date().toISOString();
-        const memberSocketId = userSocketMap[targetUserIdStr];
-        if (memberSocketId) {
-          const memberSocket = io.sockets.sockets.get(memberSocketId);
-          if (memberSocket) memberSocket.leave(room);
-          io.to(memberSocketId).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
-        }
+        io.in(targetUserIdStr).socketsLeave(room);
+        io.to(targetUserIdStr).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
       }
 
       await Group.updateOne({ groupId: groupIdStr }, { $set: { epoch } });

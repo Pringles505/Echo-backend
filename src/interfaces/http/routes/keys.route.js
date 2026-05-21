@@ -197,10 +197,13 @@ function createKeysRouter({ keysService, mongoose, requireAuth, keyBundleLimiter
     async (req, res, next) => {
       try {
         const requesterId = req.user?.id;
+        const requesterDeviceId =
+          req.user?.deviceUserId || req.user?.deviceId || req.user?.id;
         const ip = req.ip || '';
         const userAgent = req.get('user-agent') || '';
         const { bundle } = await keysService.getPreKeyBundle({
           requesterId,
+          requesterDeviceId,
           targetUserId: req.body.targetUserId,
           ip,
           userAgent,

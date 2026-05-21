@@ -44,6 +44,13 @@ function createAuthRouter({
     return next(err);
   }
 
+  function requestMetadata(req) {
+    return {
+      ipAddress: req.ip || req.socket?.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+    };
+  }
+
   /**
    * @openapi
    * /auth/register:
@@ -81,15 +88,22 @@ function createAuthRouter({
     ]),
     async (req, res, next) => {
       try {
-        const { username, password, keyBundle, aboutme, profilePicture } = req.body;
-        const { userId } = await authService.register({
+        const { username, password, keyBundle, aboutme, profilePicture, deviceId, deviceName, platform, userAgent, locale, timezone } = req.body;
+        const result = await authService.register({
           username,
           password,
           keyBundle,
           aboutme,
           profilePicture,
+          deviceId,
+          deviceName,
+          platform,
+          userAgent,
+          locale,
+          timezone,
+          requestMetadata: requestMetadata(req),
         });
-        return res.status(201).json({ success: true, userId });
+        return res.status(201).json({ success: true, ...result });
       } catch (err) {
         if (err?.code === 11000 && err?.keyPattern?.username) {
           return sendHttpError(res, 409, 'Username already taken', 'username_conflict');
@@ -142,12 +156,18 @@ function createAuthRouter({
     ]),
     async (req, res, next) => {
       try {
-        const { username, password } = req.body;
+        const { username, password, deviceId, deviceName, platform, userAgent, locale, timezone } = req.body;
         const result = await authService.login({
           username,
           password,
+          deviceId,
+          deviceName,
+          platform,
+          userAgent,
+          locale,
+          timezone,
           ip: req.ip,
-          userAgent: req.headers?.['user-agent'] || null,
+          requestMetadata: requestMetadata(req),
         });
         if (!result || result.success === false) {
           return sendHttpError(
@@ -164,6 +184,8 @@ function createAuthRouter({
         };
         if (result.refreshToken) payload.refreshToken = result.refreshToken;
         if (result.expiresIn) payload.expiresIn = result.expiresIn;
+        if (result.deviceId) payload.deviceId = result.deviceId;
+        if (result.deviceUserId) payload.deviceUserId = result.deviceUserId;
         return res.json(payload);
       } catch (err) {
         if (err?.status) {
@@ -222,6 +244,8 @@ function createAuthRouter({
           refreshToken: result.refreshToken,
           userId: result.userId,
           expiresIn: result.expiresIn,
+          deviceId: result.deviceId,
+          deviceUserId: result.deviceUserId,
         });
       } catch (err) {
         return handleServiceError(res, next, err);

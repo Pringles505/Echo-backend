@@ -41,11 +41,14 @@ const OPK_BUNDLE_LIMITS = {
 // ============================================================================
 
 /** Allowed origins for CORS requests */
-const CORS_ORIGINS = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://chat-tuah-frontend.vercel.app',
-];
+const CORS_ORIGINS = process.env.NODE_ENV === 'production'
+  ? [
+    'https://chat-tuah-frontend.vercel.app',
+    'tauri://localhost',
+    'http://tauri.localhost',
+    'https://tauri.localhost',
+  ]
+  : true; // Allow all origins in development (LAN phones, Vite proxy, etc.)
 
 /** Default server port */
 const PORT = process.env.PORT || 3001;

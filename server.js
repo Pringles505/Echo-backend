@@ -41,6 +41,13 @@ const blogRouteModule = require('./src/interfaces/http/routes/blog.route');
 const adminRouteModule = require('./src/interfaces/http/routes/admin.route');
 const contactRouteModule = require('./src/interfaces/http/routes/contact.route');
 const statusRouteModule = require('./src/interfaces/http/routes/status.route');
+const { createPairingRouter } = require('./src/interfaces/http/routes/pairing.route');
+const { createDevicesRouter } = require('./src/interfaces/http/routes/devices.route');
+const { createEnvelopesRouter } = require('./src/interfaces/http/routes/envelopes.route');
+const { createSyncRouter } = require('./src/interfaces/http/routes/sync.route');
+const { createPairingService } = require('./src/modules/devices/application/pairingService');
+const { createDeviceManagementService } = require('./src/modules/devices/application/deviceManagementService');
+const { createDeviceSyncService } = require('./src/modules/deviceSync/application/deviceSyncService');
 const { setupSwagger } = require('./src/interfaces/http/swagger');
 const { createAuthMiddleware } = require('./src/interfaces/http/middleware/auth');
 const { notFoundHandler, errorHandler } = require('./src/interfaces/http/middleware/errorHandlers');
@@ -128,22 +135,31 @@ const {
   NewsletterSubscriber,
   SupportTicket,
   RefreshToken,
+  Device,
+  PairingSession,
+  MessageEnvelope,
+  DeviceSyncSession,
 } = createModels(mongoose);
 
 const authService = createAuthService({
   User,
   RefreshToken,
+  Device,
   bcrypt,
   jwt,
   normalizeOneTimePreKeysPayload,
   OPK_MAX_STORED,
 });
 
+const pairingService = createPairingService({ PairingSession, Device, User, authService });
+const deviceManagementService = createDeviceManagementService({ Device, MessageEnvelope, User, io });
+const deviceSyncService = createDeviceSyncService({ DeviceSyncSession, User, Device, authService });
+
 const sequenceService = createSequenceService({ Message, MessageSequence, GroupSequence });
 const callEventService = createCallEventService({ io, userSocketMap, Call, Message, User });
 const opkLimiter = createOpkLimiterService(OpkRequestLog);
 const notifier = createSocketNotifier({ io, userSocketMap });
-const { requireAuth, optionalAuth, requireAdmin } = createAuthMiddleware({ jwt, User });
+const { requireAuth, optionalAuth, requireAdmin } = createAuthMiddleware({ jwt, User, Device });
 
 const opkPolicyDeps = {
   OPK_MAX_STORED,
@@ -245,6 +261,11 @@ const adminRouter = pickRouter(adminRouteModule, 'createAdminRouter', 'adminRout
 const contactRouter = pickRouter(contactRouteModule, 'createContactRouter', 'contactRouter');
 const statusRouter = pickRouter(statusRouteModule, 'createStatusRouter', 'statusRouter');
 
+const pairingRouter = createPairingRouter({ pairingService, mongoose, requireAuth });
+const devicesRouter = createDevicesRouter({ deviceManagementService, mongoose, requireAuth });
+const envelopesRouter = createEnvelopesRouter({ deviceManagementService, mongoose, requireAuth });
+const syncRouter = createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAuth });
+
 const mountHttpRoutes = (target) => {
   target.use(healthRouter);
   target.use(authRouter);
@@ -259,6 +280,10 @@ const mountHttpRoutes = (target) => {
   target.use(adminRouter);
   target.use(contactRouter);
   target.use(statusRouter);
+  target.use(pairingRouter);
+  target.use(devicesRouter);
+  target.use(envelopesRouter);
+  target.use(syncRouter);
 };
 
 mountHttpRoutes(app);
@@ -297,9 +322,22 @@ const authenticate = (socket, next) => {
     return next(new Error('unauthorized'));
   }
 
-  jwt.verify(token.trim(), process.env.JWT_SECRET, (err, decoded) => {
+  jwt.verify(token.trim(), process.env.JWT_SECRET, async (err, decoded) => {
     if (err) return next(new Error('unauthorized'));
     if (!decoded?.id) return next(new Error('unauthorized'));
+
+    if (decoded.deviceId) {
+      try {
+        const device = await Device.findOne({ deviceId: decoded.deviceId }).lean();
+        if (!device) return next(new Error('device_not_registered'));
+        if (device.isRevoked) return next(new Error('device_revoked'));
+        if (String(device.parentUserId) !== String(decoded.id)) {
+          return next(new Error('device_forbidden'));
+        }
+      } catch {
+        return next(new Error('unauthorized'));
+      }
+    }
 
     userSocketMap[decoded.id] = socket.id;
     socket.user = decoded;
@@ -328,6 +366,7 @@ io.on('connection', (socket) => {
       GroupMember,
       GroupSequence,
       KeyPackage,
+      Device,
     },
     services: {
       makeConversationKey: sequenceService.makeConversationKey,
@@ -348,6 +387,7 @@ io.on('connection', (socket) => {
       estimateOpkCountAfterConsume,
     },
     opkLimiter,
+    deviceSyncService,
   });
 });
 

@@ -28,6 +28,8 @@
  */
 function registerPresenceSocketHandlers({ socket, io, userSocketMap, Message, User }) {
   if (socket.user?.id) {
+    socket.join(socket.user.id);
+    if (socket.user.deviceUserId) socket.join(socket.user.deviceUserId);
     socket.broadcast.emit('userOnline', { userId: socket.user.id });
     socket.emit('onlineUsersList', { onlineUsers: Object.keys(userSocketMap) });
 

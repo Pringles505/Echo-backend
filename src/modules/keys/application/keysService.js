@@ -129,16 +129,26 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
      *
      * @param {object} input
      * @param {string} input.requesterId
+     * @param {string} [input.requesterDeviceId]
      * @param {string} input.targetUserId
      * @param {string} [input.ip]
      * @param {string} [input.userAgent]
      * @returns {Promise<{ bundle: object }>}
      * @throws {UnauthorizedError|BadRequestError|RateLimitError|NotFoundError}
      */
-    async getPreKeyBundle({ requesterId, targetUserId, ip = '', userAgent = '' } = {}) {
+    async getPreKeyBundle({ requesterId, requesterDeviceId, targetUserId, ip = '', userAgent = '' } = {}) {
       const reqId = String(requesterId ?? '');
       const targetId = String(targetUserId ?? '');
-      const pairKey = `${reqId}:${targetId}`;
+      // Sibling devices on one account share `requesterId` (the parent user id
+      // baked into the JWT), so leasing the bundle under that key returns the
+      // same OPK to every sibling within the lease window; after the first
+      // sibling's responder consumes it, the rest fail with "OPK private key
+      // not found". Scope the lease (and per-pair request bucket) to the
+      // sender's device. Defensively fall back to the parent id when the
+      // device id is absent so unauthenticated/legacy callers still hit *some*
+      // bucket; the requester rate limiter remains account-level.
+      const reqDeviceId = String(requesterDeviceId ?? requesterId ?? '');
+      const pairKey = `${reqDeviceId}:${targetId}`;
 
       if (!reqId) {
         logOpkRequest({ requesterId: null, targetUserId: targetId, pairKey, ip, userAgent, outcome: 'unauthorized' });

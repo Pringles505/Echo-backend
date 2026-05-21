@@ -54,6 +54,7 @@ const { getSocketIp } = require('../context/opkLimiter');
  * @param {*} deps.io - Socket.IO server instance
  * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
  * @param {import('mongoose').Model} deps.User - User model
+ * @param {import('mongoose').Model} [deps.Device] - Device model (optional)
  * @param {function} deps.normalizeOneTimePreKeysPayload - OPK normalization function
  * @param {function} deps.dedupeIncomingOpks - Deduplication function for OPKs
  * @param {function} deps.capToRemainingCapacity - Cap OPKs to available space
@@ -69,6 +70,7 @@ function registerOpkSocketHandlers(deps) {
     io,
     userSocketMap,
     User,
+    Device,
     normalizeOneTimePreKeysPayload,
     dedupeIncomingOpks,
     capToRemainingCapacity,
@@ -138,10 +140,17 @@ function registerOpkSocketHandlers(deps) {
 
   socket.on('getPreKeyBundle', async ({ targetUserId }, callback) => {
     const requesterId = socket.user?.id;
+    // Lease + per-pair rate limit must be scoped to the requesting *device*,
+    // not the parent account: sibling devices share `socket.user.id` (it's the
+    // parent user id from the JWT), so a user-level pairKey would hand every
+    // sibling the same cached bundle within the 60s lease window, including
+    // the OPK that the first sibling already had the responder consume.
+    const requesterDeviceId =
+      socket.user?.deviceUserId || socket.user?.deviceId || socket.user?.id;
     const targetId = String(targetUserId ?? '');
     const ip = getSocketIp(socket);
     const userAgent = String(socket?.handshake?.headers?.['user-agent'] ?? '');
-    const pairKey = `${requesterId ?? ''}:${targetId}`;
+    const pairKey = `${requesterDeviceId ?? ''}:${targetId}`;
 
     if (!requesterId) {
       logOpkRequest({ requesterId: null, targetUserId: targetId, pairKey, ip, userAgent, outcome: 'unauthorized' });
@@ -320,6 +329,73 @@ function registerOpkSocketHandlers(deps) {
     } catch (error) {
       console.error('❌ Error fetching OPK status:', error);
       callback?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * 'publishDeviceKeyBundle' event - Replace the authenticated user's public key material.
+   * Called after replaceCurrentDeviceIdentity (post-sync/pairing) to push new ELD-generated
+   * keys to the server so other devices can run a fresh X3DH against the updated bundle.
+   * Replaces all OPKs because the old OPK private keys no longer exist in ELD.
+   *
+   * @event publishDeviceKeyBundle
+   * @param {{ deviceId: string, deviceName: string, platform: string, keyBundle: object }} data
+   * @param {function} callback - Ack: { success: boolean, error?: string }
+   */
+  socket.on('publishDeviceKeyBundle', async (data, callback) => {
+    const ack = typeof callback === 'function' ? callback : () => {};
+    try {
+      const authedUserId = socket.user?.id;
+      if (!authedUserId) return ack({ success: false, error: 'Unauthorized' });
+
+      const { deviceId, deviceName, platform, keyBundle } = data ?? {};
+      if (!keyBundle || !deviceId) return ack({ success: false, error: 'Missing required fields' });
+
+      const { publicIdentityKeyX25519, publicIdentityKeyEd25519, publicSignedPreKey, oneTimePreKeys } = keyBundle;
+      if (!Array.isArray(publicSignedPreKey) || publicSignedPreKey.length < 2) {
+        return ack({ success: false, error: 'Invalid publicSignedPreKey' });
+      }
+
+      const [signedPreKey, signature] = publicSignedPreKey;
+      const normalizedOpks = normalizeOneTimePreKeysPayload(oneTimePreKeys ?? [], OPK_MAX_STORED);
+
+      await User.updateOne(
+        { id: authedUserId },
+        {
+          $set: {
+            publicIdentityKeyX25519,
+            publicIdentityKeyEd25519,
+            signedPreKey,
+            signature,
+            signedPreKeyId: 0,
+            oneTimePreKeys: normalizedOpks,
+          },
+        }
+      );
+
+      if (Device) {
+        await Device.updateOne(
+          { deviceId, parentUserId: authedUserId },
+          {
+            $set: {
+              publicIdentityKeyX25519,
+              publicIdentityKeyEd25519,
+              signedPreKey,
+              signedPreKeySignature: signature,
+              signedPreKeyId: 0,
+              lastSeen: new Date(),
+              ...(deviceName ? { deviceName } : {}),
+              ...(platform ? { platform } : {}),
+            },
+          }
+        );
+      }
+
+      console.log(`[publishDeviceKeyBundle] Keys updated for user ${authedUserId} device ${deviceId}`);
+      ack({ success: true });
+    } catch (err) {
+      console.error('❌ Error in publishDeviceKeyBundle:', err);
+      ack({ success: false, error: 'Internal server error' });
     }
   });
 }

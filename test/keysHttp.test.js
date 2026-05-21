@@ -38,7 +38,15 @@ function buildApp({
         if (!userId) {
           return res.status(401).json({ success: false, error: 'Unauthorized', code: 'unauthorized' });
         }
-        req.user = { id: String(userId) };
+        req.user = {
+          id: String(userId),
+          deviceUserId: req.headers['x-test-device-user']
+            ? String(req.headers['x-test-device-user'])
+            : undefined,
+          deviceId: req.headers['x-test-device']
+            ? String(req.headers['x-test-device'])
+            : undefined,
+        };
         return next();
       }
     : undefined;
@@ -234,9 +242,32 @@ test('POST /keys/bundle returns 200 with bundle and forwards requester/ip/UA', a
   assert.equal(res.body.bundle.opk.opkId, 'opk-1');
   assert.ok(captured);
   assert.equal(captured.requesterId, 'REQ1');
+  assert.equal(captured.requesterDeviceId, 'REQ1');
   assert.equal(captured.targetUserId, 'TARGET');
   assert.equal(captured.userAgent, 'jest/1.0');
   assert.ok(typeof captured.ip === 'string');
+});
+
+test('POST /keys/bundle forwards requesterDeviceId when authenticated as a sibling device', async () => {
+  let captured = null;
+  const app = buildApp({
+    keysService: stubService({
+      getPreKeyBundle: async (input) => {
+        captured = input;
+        return { bundle: { opk: null } };
+      },
+    }),
+  });
+
+  const res = await request(app)
+    .post('/keys/bundle')
+    .set('x-test-user', 'PARENT')
+    .set('x-test-device-user', 'DEVICE-2')
+    .send({ targetUserId: 'TARGET' });
+
+  assert.equal(res.status, 200);
+  assert.equal(captured.requesterId, 'PARENT');
+  assert.equal(captured.requesterDeviceId, 'DEVICE-2');
 });
 
 test('POST /keys/bundle returns 401 when not authenticated', async () => {
