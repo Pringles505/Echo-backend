@@ -140,10 +140,17 @@ function registerOpkSocketHandlers(deps) {
 
   socket.on('getPreKeyBundle', async ({ targetUserId }, callback) => {
     const requesterId = socket.user?.id;
+    // Lease + per-pair rate limit must be scoped to the requesting *device*,
+    // not the parent account: sibling devices share `socket.user.id` (it's the
+    // parent user id from the JWT), so a user-level pairKey would hand every
+    // sibling the same cached bundle within the 60s lease window, including
+    // the OPK that the first sibling already had the responder consume.
+    const requesterDeviceId =
+      socket.user?.deviceUserId || socket.user?.deviceId || socket.user?.id;
     const targetId = String(targetUserId ?? '');
     const ip = getSocketIp(socket);
     const userAgent = String(socket?.handshake?.headers?.['user-agent'] ?? '');
-    const pairKey = `${requesterId ?? ''}:${targetId}`;
+    const pairKey = `${requesterDeviceId ?? ''}:${targetId}`;
 
     if (!requesterId) {
       logOpkRequest({ requesterId: null, targetUserId: targetId, pairKey, ip, userAgent, outcome: 'unauthorized' });
