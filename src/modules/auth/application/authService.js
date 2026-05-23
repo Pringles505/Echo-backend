@@ -5,6 +5,8 @@ const {
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_BYTES,
+  BCRYPT_SALT_ROUNDS,
+  DEVICE_TOKEN_TTL,
 } = require('../../../shared/constants');
 const { UnauthorizedError, BadRequestError } = require('../../../shared/errors');
 
@@ -145,7 +147,7 @@ function createAuthService({
         keyBundle;
       const [signedPreKey, signature] = publicSignedPreKey;
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
       const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
       const id = nanoid();
       const normalizedOpks = normalizeOneTimePreKeysPayload(oneTimePreKeys, OPK_MAX_STORED);
@@ -385,7 +387,7 @@ function createAuthService({
       if (deviceId) payload.deviceId = deviceId;
       if (deviceUserId) payload.deviceUserId = deviceUserId;
       if (platform) payload.platform = platform;
-      return jwt.sign(payload, secret, { expiresIn: '30d' });
+      return jwt.sign(payload, secret, { expiresIn: DEVICE_TOKEN_TTL });
     },
 
     async upsertDeviceRecord({

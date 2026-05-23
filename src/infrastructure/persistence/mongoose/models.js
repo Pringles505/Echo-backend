@@ -1,3 +1,8 @@
+const {
+  DEVICE_ENVELOPE_TTL_SECONDS,
+  OPK_REQUEST_LOG_TTL,
+} = require('../../../shared/constants');
+
 /**
  * Registers and returns all mongoose models used by the app.
  * This keeps persistence details out of the runtime bootstrap.
@@ -103,7 +108,7 @@ function createModels(mongoose) {
     opkId: { type: String, default: null },
     createdAt: { type: Date, default: Date.now, index: true },
   });
-  opkRequestLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
+  opkRequestLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: OPK_REQUEST_LOG_TTL });
 
   const calls = new mongoose.Schema({
     callId: { type: String, unique: true },
@@ -147,6 +152,9 @@ function createModels(mongoose) {
   });
 
   const deviceSchema = new mongoose.Schema({
+    // `deviceId` is the canonical opaque device identifier; unique across the
+    // whole collection (one row per physical device). `deviceUserId` is the
+    // synthetic per-device account id (e.g. "alice_x1") and is also unique.
     deviceId: { type: String, required: true, unique: true, index: true },
     parentUserId: { type: String, required: true, index: true },
     deviceUserId: { type: String, required: true, unique: true },
@@ -174,6 +182,8 @@ function createModels(mongoose) {
     createdAt: { type: Date, default: Date.now },
     lastSeen: { type: Date, default: null },
   });
+  // Used by listDevices, getDeviceBundles, and the per-user fanout query.
+  deviceSchema.index({ parentUserId: 1, isRevoked: 1 });
 
   const pairingSessionSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, unique: true, index: true },
@@ -222,7 +232,9 @@ function createModels(mongoose) {
     deliveredAt: { type: Date, default: null },
     readAt: { type: Date, default: null },
   });
-  messageEnvelopeSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 7 });
+  messageEnvelopeSchema.index({ createdAt: 1 }, { expireAfterSeconds: DEVICE_ENVELOPE_TTL_SECONDS });
+  // Composite index used by envelopes fanout pull (sorted by createdAt).
+  messageEnvelopeSchema.index({ recipientDeviceId: 1, deliveredAt: 1, createdAt: 1 });
 
   const deviceSyncSessionSchema = new mongoose.Schema({
     sessionId: { type: String, required: true, unique: true, index: true },

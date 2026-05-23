@@ -12,8 +12,45 @@ function createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAu
   const createLimit = typeof syncCreateLimiter === 'function' ? syncCreateLimiter : (_req, _res, next) => next();
   const attachLimit = typeof syncAttachLimiter === 'function' ? syncAttachLimiter : (_req, _res, next) => next();
 
+  // Resolve the target session token in this preference order:
+  //   1. `X-Sync-Target-Token` header              (preferred — not logged by
+  //                                                 most reverse proxies)
+  //   2. `Authorization: Bearer sync:<token>`       (interop fallback for
+  //                                                 environments that strip
+  //                                                 custom headers)
+  //   3. `req.body.targetAccessToken`               (POST callers)
+  //   4. `req.query.targetAccessToken`              (LEGACY — emit a header
+  //                                                 instead; query strings
+  //                                                 land in HTTP access logs
+  //                                                 and CDN trace logs)
+  //
+  // After resolution we delete `req.query.targetAccessToken` so it does not
+  // accidentally appear in downstream loggers (e.g. morgan, pino-http).
   function targetToken(req) {
-    return req.headers['x-sync-target-token'] || req.body?.targetAccessToken || req.query?.targetAccessToken || null;
+    const headerValue = req.headers['x-sync-target-token'];
+    if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+      return headerValue.trim();
+    }
+    const auth = req.headers?.authorization || req.headers?.Authorization;
+    if (typeof auth === 'string') {
+      const trimmed = auth.trim();
+      // Pattern: `Bearer sync:<token>` distinguishes target-session tokens
+      // from full user JWTs so the bearer middleware can keep ignoring them.
+      const match = /^Bearer\s+sync:(.+)$/i.exec(trimmed);
+      if (match && match[1]) return match[1].trim();
+    }
+    if (typeof req.body?.targetAccessToken === 'string' && req.body.targetAccessToken.length > 0) {
+      return req.body.targetAccessToken;
+    }
+    if (typeof req.query?.targetAccessToken === 'string' && req.query.targetAccessToken.length > 0) {
+      const value = req.query.targetAccessToken;
+      // Strip the legacy query param from the request to keep it out of
+      // downstream loggers (deprecation path — clients should migrate to the
+      // header).
+      try { delete req.query.targetAccessToken; } catch { /* req.query may be a frozen proxy */ }
+      return value;
+    }
+    return null;
   }
 
   function handleError(res, next, err) {

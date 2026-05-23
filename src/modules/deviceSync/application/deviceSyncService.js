@@ -7,12 +7,19 @@ const {
   NotFoundError,
   RateLimitError,
 } = require('../../../shared/errors');
+const {
+  SYNC_SESSION_TTL_MS,
+  SYNC_SESSION_MAX_TTL_MS,
+  SYNC_CHUNK_MAX_SIZE,
+  SYNC_CHUNK_MAX_COUNT,
+  SYNC_MAX_TOTAL_BYTES,
+} = require('../../../shared/constants');
 
-const DEFAULT_TTL_MS = 90_000;
-const MAX_TTL_MS = 120_000;
-const MAX_CHUNK_SIZE = 256 * 1024;
-const MAX_CHUNK_COUNT = 256;
-const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
+const DEFAULT_TTL_MS = SYNC_SESSION_TTL_MS;
+const MAX_TTL_MS = SYNC_SESSION_MAX_TTL_MS;
+const MAX_CHUNK_SIZE = SYNC_CHUNK_MAX_SIZE;
+const MAX_CHUNK_COUNT = SYNC_CHUNK_MAX_COUNT;
+const MAX_TOTAL_BYTES = SYNC_MAX_TOTAL_BYTES;
 
 function sha256(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
