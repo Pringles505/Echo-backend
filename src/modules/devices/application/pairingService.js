@@ -6,8 +6,12 @@ const {
   ForbiddenError,
   NotFoundError,
 } = require('../../../shared/errors');
+const {
+  PAIRING_SESSION_TTL_MS,
+  PAIRING_CODE_LENGTH,
+} = require('../../../shared/constants');
 
-const PAIRING_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const PAIRING_TTL_MS = PAIRING_SESSION_TTL_MS;
 
 function cleanString(value, maxLength = 512) {
   if (typeof value !== 'string') return null;
@@ -56,7 +60,11 @@ function metadataSet(input = {}, requestMetadata = {}) {
 }
 
 function createPairingService({ PairingSession, Device, User, authService }) {
-  const nanoid = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 8);
+  // 32-character alphabet (Crockford-ish: no 0/O/1/I/L) × PAIRING_CODE_LENGTH chars
+  //   8 chars  → ~40 bits entropy (>= the 8-alphanumeric floor requested by audit)
+  //   12 chars → ~60 bits, recommended when surfaced as a typed code
+  // Enforced floor of 8 lives in shared/constants.js.
+  const nanoid = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', PAIRING_CODE_LENGTH);
 
   function ensureActive(session) {
     if (!session) throw new NotFoundError('Pairing session not found', 'pairing_not_found');
