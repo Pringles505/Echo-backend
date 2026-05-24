@@ -126,12 +126,6 @@ Failure:
 { "success": false, "error": "message", "code": "stable_machine_code" }
 ```
 
-## Architecture Reference
-
-For full architecture, module boundaries, and development conventions, see:
-
-- `BACKEND.md`
-
 ## Security Notes
 
 - Do not commit real secrets.
