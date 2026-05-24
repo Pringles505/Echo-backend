@@ -58,7 +58,8 @@ function createUserProfileService({
 
   return {
     /**
-     * Find a user by username.
+     * Find a user by exact username. Kept for backward compatibility with the
+     * `searchUser` socket handler.
      * @param {{ searchTerm: string }} input
      * @returns {Promise<PublicUser>}
      */
@@ -70,6 +71,39 @@ function createUserProfileService({
       if (!user) throw new NotFoundError('User not found', 'user_not_found');
       return { id: user.id, username: user.username };
     },
+
+    /**
+     * Prefix search by username. Returns up to `limit` matches as full public
+     * profiles (no key material, no friend list — the same shape `getUserById`
+     * exposes minus private fields). Excludes the requester from the results
+     * when `excludeUserId` is provided.
+     *
+     * @param {{ searchTerm: string, limit?: number, excludeUserId?: string }} input
+     * @returns {Promise<{ users: Array<PublicUser> }>}
+     */
+    async searchUsers({ searchTerm, limit = 20, excludeUserId = null }) {
+      if (typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
+        throw new BadRequestError('searchTerm is required', 'validation_error');
+      }
+      const term = searchTerm.trim();
+      // Escape regex metacharacters so usernames containing `.` or `+` don't
+      // turn the prefix into an unintended pattern.
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const filter = { username: { $regex: `^${escaped}`, $options: 'i' } };
+      if (excludeUserId) filter.id = { $ne: excludeUserId };
+      const docs = await User.find(filter)
+        .limit(Math.max(1, Math.min(50, Number(limit) || 20)))
+        .lean();
+      const users = docs.map((u) => ({
+        id: u.id,
+        username: u.username,
+        aboutme: u.aboutme || '',
+        profilePicture: u.profilePicture || '',
+        banner: u.banner || '',
+      }));
+      return { users };
+    },
+
 
     /**
      * Fetch a public user profile by id.

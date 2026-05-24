@@ -80,8 +80,11 @@ function createUsersRouter(deps = {}) {
    * /users/search:
    *   post:
    *     tags: [Users]
-   *     summary: Search for a user by exact username
-   *     description: Returns minimal public information for the matching account.
+   *     summary: Search for users by username prefix
+   *     description: |
+   *       Case-insensitive prefix search by username. Returns an array of full
+   *       public profiles (id, username, aboutme, profilePicture, banner).
+   *       Limited to 20 results, never includes the authenticated user.
    *     requestBody:
    *       required: true
    *       content:
@@ -90,14 +93,18 @@ function createUsersRouter(deps = {}) {
    *             $ref: '#/components/schemas/SearchUserRequest'
    *     responses:
    *       200:
-   *         description: Match found
+   *         description: Matches (may be empty)
    *         content:
    *           application/json:
    *             schema:
-   *               $ref: '#/components/schemas/UserResponse'
+   *               type: object
+   *               properties:
+   *                 success: { type: boolean }
+   *                 users:
+   *                   type: array
+   *                   items: { $ref: '#/components/schemas/UserProfile' }
    *       400: { $ref: '#/components/responses/BadRequestResponse' }
    *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
-   *       404: { $ref: '#/components/responses/NotFoundResponse' }
    *       429: { $ref: '#/components/responses/RateLimitedResponse' }
    *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
    */
@@ -112,8 +119,11 @@ function createUsersRouter(deps = {}) {
     async (req, res, next) => {
       try {
         const { searchTerm } = req.body;
-        const user = await userProfileService.searchUser({ searchTerm });
-        return res.json({ success: true, user });
+        const { users } = await userProfileService.searchUsers({
+          searchTerm,
+          excludeUserId: req.user?.id || null,
+        });
+        return res.json({ success: true, users });
       } catch (err) {
         return handleServiceError(res, next, err);
       }
