@@ -34,6 +34,33 @@ function createContactsService({ User, notifier } = {}) {
 
   return {
     /**
+     * List the user's friends as full public profiles. Friend IDs are stored
+     * on the user document as an array of user IDs; resolved in a single
+     * query. Returns an empty array if the user has no friends yet.
+     *
+     * @param {{ userId: string }} input
+     * @returns {Promise<{ contacts: Array<{id, username, aboutme, profilePicture, banner}> }>}
+     */
+    async listContacts({ userId }) {
+      if (typeof userId !== 'string' || userId.length === 0) {
+        throw new BadRequestError('userId is required', 'validation_error');
+      }
+      const me = await User.findOne({ id: userId }).lean();
+      if (!me) throw new NotFoundError('User not found', 'user_not_found');
+      const friendIds = Array.isArray(me.friends) ? me.friends : [];
+      if (friendIds.length === 0) return { contacts: [] };
+      const docs = await User.find({ id: { $in: friendIds } }).lean();
+      const contacts = docs.map((u) => ({
+        id: u.id,
+        username: u.username,
+        aboutme: u.aboutme || '',
+        profilePicture: u.profilePicture || '',
+        banner: u.banner || '',
+      }));
+      return { contacts };
+    },
+
+    /**
      * Add a one-way friendship edge from `userId` → `friendId`.
      * Note: the original socket handler only mutates `user.friends` (not the
      * target). We replicate that exact behaviour to keep parity.

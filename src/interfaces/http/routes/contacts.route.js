@@ -135,6 +135,47 @@ function createContactsRouter(deps = {}) {
     }
   );
 
+  /**
+   * @openapi
+   * /contacts/list:
+   *   get:
+   *     tags: [Contacts]
+   *     summary: List the authenticated user's friends as full public profiles
+   *     description: |
+   *       Returns the resolved friend objects (id, username, aboutme,
+   *       profilePicture, banner) of the authenticated user. Empty array when
+   *       the user has no friends yet. Use this to render a permanent contact
+   *       list in the UI instead of relying on per-search lookups.
+   *     responses:
+   *       200:
+   *         description: Friends list (may be empty)
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: { type: boolean }
+   *                 contacts:
+   *                   type: array
+   *                   items: { $ref: '#/components/schemas/UserProfile' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.get(
+    '/contacts/list',
+    requireAuth,
+    dbGuard,
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { contacts } = await contactsService.listContacts({ userId });
+        return res.json({ success: true, contacts });
+      } catch (err) {
+        return handleServiceError(res, next, err);
+      }
+    }
+  );
+
   return router;
 }
 

@@ -59,6 +59,12 @@ function authed(req) {
 function makeService(overrides = {}) {
   return {
     searchUser: async () => ({ id: 'U2', username: 'bob' }),
+    // Phase X — `/users/search` now returns an array via `searchUsers` (prefix
+    // match). The legacy exact-match `searchUser` is still used by the
+    // socket handler.
+    searchUsers: async () => ({
+      users: [{ id: 'U2', username: 'bob', aboutme: '', profilePicture: '', banner: '' }],
+    }),
     getUserById: async () => ({ id: 'U2', username: 'bob' }),
     updateProfile: async () => ({ id: 'U1', username: 'alice' }),
     updateBanner: async () => ({ id: 'U1', username: 'alice', banner: '/uploads/banner.png' }),
@@ -70,19 +76,26 @@ function makeService(overrides = {}) {
 
 // ---------------------------------------------------------------- /users/search
 
-test('POST /users/search returns 200 with user on success', async () => {
+test('POST /users/search returns 200 with users array on success', async () => {
   const seen = [];
   const svc = makeService({
-    searchUser: async (input) => {
+    searchUsers: async (input) => {
       seen.push(input);
-      return { id: 'U2', username: 'bob' };
+      return {
+        users: [{ id: 'U2', username: 'bob', aboutme: '', profilePicture: '', banner: '' }],
+      };
     },
   });
   const app = buildApp({ userProfileService: svc });
   const res = await authed(request(app).post('/users/search')).send({ searchTerm: 'bob' });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { success: true, user: { id: 'U2', username: 'bob' } });
-  assert.deepEqual(seen, [{ searchTerm: 'bob' }]);
+  assert.equal(res.body.success, true);
+  assert.ok(Array.isArray(res.body.users));
+  assert.equal(res.body.users.length, 1);
+  assert.equal(res.body.users[0].id, 'U2');
+  assert.equal(res.body.users[0].username, 'bob');
+  // Authed user must be excluded from results — front passes their own id.
+  assert.deepEqual(seen, [{ searchTerm: 'bob', excludeUserId: 'U1' }]);
 });
 
 test('POST /users/search 401 when no bearer token', async () => {
@@ -109,14 +122,15 @@ test('POST /users/search 400 when searchTerm missing', async () => {
   assert.equal(res.body.code, 'validation_error');
 });
 
-test('POST /users/search 404 when user not found', async () => {
-  const svc = makeService({
-    searchUser: async () => { throw new NotFoundError('User not found', 'user_not_found'); },
-  });
+test('POST /users/search returns empty array when nothing matches', async () => {
+  // Prefix search never 404s — "no matches" is just `users: []`. This is a
+  // contract change from the old exact-match endpoint.
+  const svc = makeService({ searchUsers: async () => ({ users: [] }) });
   const app = buildApp({ userProfileService: svc });
   const res = await authed(request(app).post('/users/search')).send({ searchTerm: 'nope' });
-  assert.equal(res.status, 404);
-  assert.equal(res.body.code, 'user_not_found');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.deepEqual(res.body.users, []);
 });
 
 test('POST /users/search 503 when DB unavailable', async () => {
