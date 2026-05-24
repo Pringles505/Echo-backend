@@ -52,8 +52,6 @@ function stubService(overrides = {}) {
   };
 }
 
-// ---------------- /calls/initiate ----------------
-
 test('POST /calls/initiate returns 200 with status ringing on success', async () => {
   const seen = [];
   const callsService = stubService({
@@ -106,8 +104,6 @@ test('POST /calls/initiate returns 400 with target_offline code', async () => {
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'target_offline');
 });
-
-// ---------------- /calls/accept ----------------
 
 test('POST /calls/accept returns 200 with status in-progress', async () => {
   const seen = [];
@@ -163,8 +159,6 @@ test('POST /calls/accept returns 401 without auth', async () => {
   assert.equal(res.status, 401);
 });
 
-// ---------------- /calls/decline ----------------
-
 test('POST /calls/decline returns 200 with status declined', async () => {
   const callsService = stubService();
   const app = buildApp({ callsService });
@@ -196,8 +190,6 @@ test('POST /calls/decline propagates 403', async () => {
   assert.equal(res.status, 403);
   assert.equal(res.body.code, 'forbidden');
 });
-
-// ---------------- /calls/end ----------------
 
 test('POST /calls/end returns 200 with duration', async () => {
   const callsService = stubService({
@@ -232,8 +224,6 @@ test('POST /calls/end returns 400 when callId missing', async () => {
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'validation_error');
 });
-
-// ---------------- /calls/media-state ----------------
 
 test('POST /calls/media-state returns 200 for video', async () => {
   const seen = [];
@@ -295,8 +285,6 @@ test('POST /calls/media-state returns 400 when isEnabled has wrong type', async 
   assert.equal(res.body.code, 'validation_error');
 });
 
-// ---------------- DB unavailable ----------------
-
 test('POST /calls/initiate returns 503 when database is offline', async () => {
   const app = buildApp({ callsService: stubService(), mongoConnected: false });
   const res = await request(app)
@@ -305,8 +293,6 @@ test('POST /calls/initiate returns 503 when database is offline', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.code, 'database_unavailable');
 });
-
-// ---------------- callsService unit tests ----------------
 
 function makeFakeCallStore() {
   const calls = new Map();
@@ -633,6 +619,6 @@ test('callsService scheduled missed-check tolerates already-deleted calls', asyn
     targetUserId: 'B',
     callId: 'CALL-DEL',
   });
-  Call.findOne = async () => null; // simulate deletion
+  Call.findOne = async () => null;
   await assert.doesNotReject(() => scheduled());
 });

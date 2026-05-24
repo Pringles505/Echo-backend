@@ -77,8 +77,6 @@ function makeEventsService(overrides = {}) {
   };
 }
 
-// ---------------------------------------- POST /admin/blog
-
 test('POST /admin/blog 201 when admin creates post', async () => {
   const seen = [];
   const blog = makeBlogService({
@@ -136,8 +134,6 @@ test('POST /admin/blog 409 on slug conflict from service', async () => {
   assert.equal(res.body.code, 'slug_conflict');
 });
 
-// ---------------------------------------- PATCH /admin/blog/:id
-
 test('PATCH /admin/blog/:id 200 on update', async () => {
   const seen = [];
   const blog = makeBlogService({
@@ -174,8 +170,6 @@ test('PATCH /admin/blog/:id 403 when non-admin', async () => {
   assert.equal(res.status, 403);
   assert.equal(res.body.code, 'forbidden_admin_required');
 });
-
-// ---------------------------------------- POST /admin/events
 
 test('POST /admin/events 201 when admin creates event', async () => {
   const seen = [];

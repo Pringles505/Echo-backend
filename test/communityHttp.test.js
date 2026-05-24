@@ -63,8 +63,6 @@ function makeNewsletterService(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------- /community/events
-
 test('GET /community/events returns 200 with events list (public, no token)', async () => {
   const captured = [];
   const events = makeEventsService({
@@ -95,8 +93,6 @@ test('GET /community/events 503 when DB unavailable', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.code, 'database_unavailable');
 });
-
-// ---------------------------------------- /community/events/:eventId/register
 
 test('POST /community/events/:eventId/register 200 on success', async () => {
   const seen = [];
@@ -142,8 +138,6 @@ test('POST /community/events/:eventId/register 409 on duplicate', async () => {
   assert.equal(res.status, 409);
   assert.equal(res.body.code, 'already_registered');
 });
-
-// ------------------------------------------------------- /community/subscribe
 
 test('POST /community/subscribe 200 with normalized email', async () => {
   const seen = [];

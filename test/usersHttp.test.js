@@ -30,7 +30,6 @@ function buildApp({ userProfileService, mongoConnected = true, withAuth = true }
   app.use(express.json());
   const fakeMongoose = { connection: { readyState: mongoConnected ? 1 : 0 } };
 
-  // Real requireAuth wired against a JWT mock that accepts VALID_TOKEN only.
   const previousSecret = process.env.JWT_SECRET;
   process.env.JWT_SECRET = previousSecret || 'test-secret';
   const { requireAuth: realRequireAuth } = createAuthMiddleware({ jwt: makeJwtMock() });
@@ -59,9 +58,6 @@ function authed(req) {
 function makeService(overrides = {}) {
   return {
     searchUser: async () => ({ id: 'U2', username: 'bob' }),
-    // Phase X — `/users/search` now returns an array via `searchUsers` (prefix
-    // match). The legacy exact-match `searchUser` is still used by the
-    // socket handler.
     searchUsers: async () => ({
       users: [{ id: 'U2', username: 'bob', aboutme: '', profilePicture: '', banner: '' }],
     }),
@@ -73,8 +69,6 @@ function makeService(overrides = {}) {
     ...overrides,
   };
 }
-
-// ---------------------------------------------------------------- /users/search
 
 test('POST /users/search returns 200 with users array on success', async () => {
   const seen = [];
@@ -94,7 +88,6 @@ test('POST /users/search returns 200 with users array on success', async () => {
   assert.equal(res.body.users.length, 1);
   assert.equal(res.body.users[0].id, 'U2');
   assert.equal(res.body.users[0].username, 'bob');
-  // Authed user must be excluded from results — front passes their own id.
   assert.deepEqual(seen, [{ searchTerm: 'bob', excludeUserId: 'U1' }]);
 });
 
@@ -123,8 +116,7 @@ test('POST /users/search 400 when searchTerm missing', async () => {
 });
 
 test('POST /users/search returns empty array when nothing matches', async () => {
-  // Prefix search never 404s — "no matches" is just `users: []`. This is a
-  // contract change from the old exact-match endpoint.
+  // Prefix search never 404s — "no matches" returns `users: []` instead.
   const svc = makeService({ searchUsers: async () => ({ users: [] }) });
   const app = buildApp({ userProfileService: svc });
   const res = await authed(request(app).post('/users/search')).send({ searchTerm: 'nope' });
@@ -140,8 +132,6 @@ test('POST /users/search 503 when DB unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-// ---------------------------------------------------------------- /users/online
-
 test('GET /users/online returns 200 with snapshot', async () => {
   const svc = makeService({ listOnlineUserIds: () => ['U1', 'U7'] });
   const app = buildApp({ userProfileService: svc });
@@ -155,8 +145,6 @@ test('GET /users/online 401 without token', async () => {
   const res = await request(app).get('/users/online');
   assert.equal(res.status, 401);
 });
-
-// ---------------------------------------------------------------- /users/:userId
 
 test('GET /users/:userId returns 200 with profile', async () => {
   const svc = makeService({
@@ -180,9 +168,8 @@ test('GET /users/:userId 404 when missing', async () => {
 });
 
 test('GET /users/online is matched before /users/:userId (route ordering)', async () => {
-  // If /users/:userId were registered first, "online" would be captured
-  // as a userId param and we'd hit getUserById instead. This test guards
-  // the ordering inside createUsersRouter.
+  // Guards the route ordering inside createUsersRouter: if /users/:userId came
+  // first, "online" would be captured as a userId param.
   let getUserCalled = false;
   const svc = makeService({
     listOnlineUserIds: () => ['U1'],
@@ -200,8 +187,6 @@ test('GET /users/:userId 401 without token', async () => {
   const res = await request(app).get('/users/U2');
   assert.equal(res.status, 401);
 });
-
-// ---------------------------------------------------------------- /users/profile/update
 
 test('PUT /users/profile/update returns 200 with updated user', async () => {
   const seen = [];
@@ -268,8 +253,6 @@ test('PUT /users/profile/update 401 without token', async () => {
   assert.equal(res.status, 401);
 });
 
-// ---------------------------------------------------------------- /users/profile/banner
-
 test('PUT /users/profile/banner 200 with updated banner url', async () => {
   const seen = [];
   const svc = makeService({
@@ -330,8 +313,6 @@ test('PUT /users/profile/banner 404 when user missing', async () => {
   assert.equal(res.body.code, 'user_not_found');
 });
 
-// ---------------------------------------------------------------- /users/account/delete
-
 test('DELETE /users/account/delete 200 when password matches', async () => {
   const seen = [];
   const svc = makeService({
@@ -348,7 +329,7 @@ test('DELETE /users/account/delete 200 when password matches', async () => {
   assert.deepEqual(seen, [{ userId: 'U1', password: 'secret' }]);
 });
 
-test('DELETE /users/account/delete 400 when password missing (SEC-002)', async () => {
+test('DELETE /users/account/delete 400 when password missing', async () => {
   const app = buildApp({ userProfileService: makeService() });
   const res = await authed(request(app).delete('/users/account/delete')).send({});
   assert.equal(res.status, 400);

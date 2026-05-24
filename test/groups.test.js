@@ -4,14 +4,11 @@ const { once } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Load test env vars from Echo-backend/.env.test (preferred) or Echo-backend/.env
 const dotenv = require("dotenv");
 const envTestPath = path.join(__dirname, "..", ".env.test");
 const envPath = path.join(__dirname, "..", ".env");
 dotenv.config({ path: fs.existsSync(envTestPath) ? envTestPath : envPath });
 
-// Prefer an explicit test DB so you don't pollute your real DB.
-// Set this before importing server.js because it connects at import time.
 if (process.env.MONGO_URI_TEST) {
   process.env.MONGO_URI = process.env.MONGO_URI_TEST;
 }
@@ -72,7 +69,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
   const userB = { id: `GB-${ts}`, username: `gb_${ts}` };
   const userC = { id: `GC-${ts}`, username: `gc_${ts}` };
   const userD = { id: `GD-${ts}`, username: `gd_${ts}` };
-  const userE = { id: `GE-${ts}`, username: `ge_${ts}` }; // non-member
+  const userE = { id: `GE-${ts}`, username: `ge_${ts}` };
 
   const createdUserIds = [userA.id, userB.id, userC.id, userD.id, userE.id];
   const createdGroupIds = [];
@@ -106,7 +103,6 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
 
     const groupName = `Test Group ${ts}`;
 
-    // Members should be notified via groupAdded when online.
     const bGroupAddedP = once(b, "groupAdded");
     const cGroupAddedP = once(c, "groupAdded");
 
@@ -130,7 +126,6 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     assert.equal(bAddedPayload.name, groupName);
     assert.equal(cAddedPayload.name, groupName);
 
-    // DB sanity: group exists, members exist, sequence initialized.
     const [groupDoc, seqDoc, members] = await Promise.all([
       Group().findOne({ groupId }).lean(),
       GroupSequence().findOne({ groupId }).lean(),
@@ -156,13 +151,11 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     assert.equal(statuses.get(userB.id), "active");
     assert.equal(statuses.get(userC.id), "active");
 
-    // listMyGroups for B
     const listAck = await emitAck(b, "listMyGroups", {});
     assert.equal(listAck?.success, true);
     assert.ok(Array.isArray(listAck?.groups));
     assert.ok(listAck.groups.some((g) => String(g.groupId) === groupId));
 
-    // openGroup for B (joins room + returns members)
     const openAck = await emitAck(b, "openGroup", { groupId });
     assert.equal(openAck?.success, true);
     assert.equal(openAck?.room, `group:${groupId}`);
@@ -177,9 +170,8 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     assert.ok(openAck.members.some((m) => String(m.userId) === userB.id && m.leafIndex === 1 && m.status === "active"));
     assert.ok(openAck.members.some((m) => String(m.userId) === userC.id && m.leafIndex === 2 && m.status === "active"));
 
-    // Send group message from A.
-    // - B is in the room, should receive via room broadcast.
-    // - C is online but NOT in the room (hasn't opened the group), should receive via direct notify fallback.
+    // B is in the room and should receive via broadcast; C is online but has
+    // not opened the group, so it should receive via the direct notify fallback.
     const bMsgP = once(b, "newGroupMessage");
     const cMsgP = once(c, "newGroupMessage");
 
@@ -204,7 +196,6 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const saved1 = await Message.findOne({ conversationType: "group", groupId, seq: 0 }).lean();
     assert.ok(saved1);
 
-    // Add member D by admin A.
     const bMemberAddedP = once(b, "groupMemberAdded");
     const dGroupAddedP = once(d, "groupAdded");
 
@@ -399,11 +390,9 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const [bMlsRemovedEvt] = await bMlsRemovedP;
     assert.equal(String(bMlsRemovedEvt.groupId), mlsGroupId);
 
-    // Non-admin cannot add members.
     const addByMemberAck = await emitAck(b, "addGroupMember", { groupId, memberId: `X-${ts}` });
     assert.equal(addByMemberAck?.success, false);
 
-    // Remove member C by admin A.
     const bMemberRemovedP = once(b, "groupMemberRemoved");
     const cRemovedP = once(c, "groupRemoved");
 
@@ -417,11 +406,10 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     assert.equal(String(bRemovedEvt.groupId), groupId);
     assert.equal(String(bRemovedEvt.memberId), userC.id);
 
-    // Removed member C can no longer open the group
     const openCAck = await emitAck(c, "openGroup", { groupId });
     assert.equal(openCAck?.success, false);
 
-    // Back-compat: member D can fetch metadata via inbound groupAdded
+    // Back-compat: groupAdded can be emitted inbound to fetch metadata.
     const dInfoAck = await emitAck(d, "groupAdded", { groupId });
     assert.equal(dInfoAck?.success, true);
     assert.equal(String(dInfoAck?.group?.groupId), groupId);
@@ -432,7 +420,6 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     assert.ok(Array.isArray(dInfoAck?.members));
     assert.ok(dInfoAck.members.some((m) => String(m.userId) === userD.id && m.leafIndex === 3 && m.status === "active"));
 
-    // Non-member E cannot fetch metadata via inbound groupAdded
     const eInfoAck = await emitAck(e, "groupAdded", { groupId });
     assert.equal(eInfoAck?.success, false);
   } finally {
@@ -442,7 +429,6 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
       } catch {}
     }
 
-    // Best-effort cleanup by group id(s) created in this test.
     await Promise.allSettled([
       Message.deleteMany({ conversationType: "group", groupId: { $in: createdGroupIds } }),
       GroupMember().deleteMany({ groupId: { $in: createdGroupIds } }),

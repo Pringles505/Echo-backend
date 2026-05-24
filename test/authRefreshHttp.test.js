@@ -60,8 +60,6 @@ function makeSvc(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------- /auth/refresh
-
 test('POST /auth/refresh 200 with new token+refreshToken on rotation', async () => {
   const seen = [];
   const svc = makeSvc({
@@ -143,8 +141,6 @@ test('POST /auth/refresh 503 when DB unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-// ---------------------------------------------------------------- /auth/logout
-
 test('POST /auth/logout 200 when authenticated with valid refresh token', async () => {
   const seen = [];
   const svc = makeSvc({
@@ -162,7 +158,6 @@ test('POST /auth/logout 200 when authenticated with valid refresh token', async 
 });
 
 test('POST /auth/logout 200 idempotent when token already revoked or missing', async () => {
-  // Service returns ok regardless of whether the token existed.
   const svc = makeSvc({ logout: async () => ({ ok: true }) });
   const app = buildApp({ authService: svc });
   const res = await authed(request(app).post('/auth/logout'))

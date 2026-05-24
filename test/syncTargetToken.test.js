@@ -37,10 +37,8 @@ test('targetToken: header X-Sync-Target-Token wins over query (and the query is 
   const captured = {};
   const app = buildApp({ deviceSyncService: stubGetSession(captured) });
 
-  // Wrap with a middleware that records req.query after the router runs.
-  // (We can't introspect the live req.query directly here because the router
-  // handler runs in another request scope, but we can verify the token wins
-  // by what is passed to the service.)
+  // We can't inspect req.query in the live router scope, so we verify the
+  // header wins by checking what the service receives.
   const res = await request(app)
     .get('/sync/sessions/S1?targetAccessToken=QUERY-TOKEN')
     .set('X-Sync-Target-Token', 'HEADER-TOKEN');

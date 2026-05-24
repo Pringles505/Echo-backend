@@ -4,15 +4,11 @@ const { once } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Load test env vars from Echo-backend/.env.test (preferred) or Echo-backend/.env
-// This keeps secrets out of your shell history and avoids long PowerShell commands.
 const dotenv = require("dotenv");
 const envTestPath = path.join(__dirname, "..", ".env.test");
 const envPath = path.join(__dirname, "..", ".env");
 dotenv.config({ path: fs.existsSync(envTestPath) ? envTestPath : envPath });
 
-// Prefer an explicit test DB so you don't pollute your real DB.
-// Set this before importing server.js because it connects at import time.
 if (process.env.MONGO_URI_TEST) {
   process.env.MONGO_URI = process.env.MONGO_URI_TEST;
 }
@@ -27,7 +23,6 @@ if (!process.env.MONGO_URI) {
   );
 }
 
-// Avoid crashes if JWT_SECRET isn't set in test env
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret";
 
 const ioClient = require("socket.io-client");
@@ -42,7 +37,6 @@ async function waitForMongo() {
 test("newMessage persists sendingNumber and previousSendingNumber", async () => {
   await waitForMongo();
 
-  // Start server on an ephemeral port for the test
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
 
@@ -54,7 +48,6 @@ test("newMessage persists sendingNumber and previousSendingNumber", async () => 
 
   let client = null;
   try {
-    // The server's newMessage handler requires the sender to exist
     await User.create({
       id: userId,
       username: `user-${Date.now()}`,
@@ -94,7 +87,6 @@ test("newMessage persists sendingNumber and previousSendingNumber", async () => 
       previousSendingNumber,
     });
 
-    // Wait until the message appears (poll)
     const deadline = Date.now() + 3000;
     let saved = null;
     while (Date.now() < deadline) {

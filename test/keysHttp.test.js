@@ -15,12 +15,6 @@ const {
   errorHandler,
 } = require('../src/interfaces/http/middleware/errorHandlers');
 
-/**
- * Build an Express app wired with the Keys router. The fake `requireAuth`
- * mirrors the production middleware contract: it sets `req.user.id` from the
- * `x-test-user` header (or denies the request when absent), so the test
- * doesn't need a real JWT layer.
- */
 function buildApp({
   keysService,
   mongoConnected = true,
@@ -95,10 +89,6 @@ function stubService(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// /keys/signed-prekey
-// ---------------------------------------------------------------------------
-
 test('POST /keys/signed-prekey returns 200 with signed pre-key', async () => {
   const calls = [];
   const app = buildApp({
@@ -159,10 +149,6 @@ test('POST /keys/signed-prekey returns 404 when user not found', async () => {
   assert.equal(res.body.code, 'user_not_found');
 });
 
-// ---------------------------------------------------------------------------
-// /keys/identity/x25519 + /keys/identity/ed25519
-// ---------------------------------------------------------------------------
-
 test('POST /keys/identity/x25519 returns 200 with X25519 identity key', async () => {
   const app = buildApp({
     keysService: stubService({
@@ -206,10 +192,6 @@ test('POST /keys/identity/ed25519 returns 404 when user missing', async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.code, 'user_not_found');
 });
-
-// ---------------------------------------------------------------------------
-// /keys/bundle
-// ---------------------------------------------------------------------------
 
 test('POST /keys/bundle returns 200 with bundle and forwards requester/ip/UA', async () => {
   let captured = null;
@@ -332,17 +314,12 @@ test('POST /keys/bundle returns 404 when target user not found', async () => {
   assert.equal(res.body.code, 'user_not_found');
 });
 
-// ---------------------------------------------------------------------------
-// /keys/opk/upload
-// ---------------------------------------------------------------------------
-
 test('POST /keys/opk/upload returns 200 with stored count (capped happy path)', async () => {
   let captured = null;
   const app = buildApp({
     keysService: stubService({
       uploadOneTimePreKeys: async (input) => {
         captured = input;
-        // Simulate cap to remaining capacity: client sent 5, only 3 stored.
         return { stored: 3 };
       },
     }),
@@ -400,10 +377,6 @@ test('POST /keys/opk/upload surfaces no_opks_provided as 400', async () => {
   assert.equal(res.body.code, 'no_opks_provided');
 });
 
-// ---------------------------------------------------------------------------
-// /keys/opk/status
-// ---------------------------------------------------------------------------
-
 test('GET /keys/opk/status returns 200 with currentCount + needed', async () => {
   const app = buildApp({
     keysService: stubService({
@@ -430,10 +403,6 @@ test('GET /keys/opk/status returns 503 when DB unavailable', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.code, 'database_unavailable');
 });
-
-// ---------------------------------------------------------------------------
-// Service-layer UnauthorizedError (e.g. internal getPreKeyBundle requesterId blank)
-// ---------------------------------------------------------------------------
 
 test('POST /keys/bundle surfaces service UnauthorizedError as 401', async () => {
   const app = buildApp({

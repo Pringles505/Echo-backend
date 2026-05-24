@@ -18,7 +18,7 @@ test('normalizeOneTimePreKeysPayload accepts {opkId, publicKey} and {opkId, opkP
     [
       { opkId: 'a', publicKey: 'PUB_A' },
       { opkId: 'b', opkPub: 'PUB_B' },
-      { opkId: 'c', publicKey: '' }, // invalid
+      { opkId: 'c', publicKey: '' },
       null,
       'nope',
     ],

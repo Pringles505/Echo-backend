@@ -21,8 +21,6 @@ function makeEventRegistrationModel(overrides = {}) {
   };
 }
 
-// -------------------- registerForEvent atomic capacity --------------------
-
 test('registerForEvent reserves capacity atomically via findOneAndUpdate', async () => {
   let updateFilter = null;
   let updateDoc = null;
@@ -48,8 +46,6 @@ test('registerForEvent reserves capacity atomically via findOneAndUpdate', async
 });
 
 test('registerForEvent returns 409 event_full when capacity exhausted (reservation fails)', async () => {
-  // findOneAndUpdate returns null = no capacity left
-  // findOne returns event in active state but at capacity → event_full
   const Event = makeEventModel({
     findOneAndUpdate: () => ({ lean: async () => null }),
     findOne: () => ({
@@ -118,7 +114,6 @@ test('registerForEvent rolls back $inc when EventRegistration.create fails on du
     (err) => err.status === 409 && err.code === 'already_registered'
   );
 
-  // Compensating decrement must have been issued exactly once
   assert.equal(decrementCalls.length, 1);
   assert.deepEqual(decrementCalls[0].update, { $inc: { registeredCount: -1 } });
 });

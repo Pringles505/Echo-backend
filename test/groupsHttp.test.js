@@ -70,8 +70,6 @@ function makeService(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------- POST /groups/create
-
 test('POST /groups/create 201 returns group + members', async () => {
   const seen = [];
   const svc = makeService({
@@ -140,8 +138,6 @@ test('POST /groups/create 503 when DB unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-// ---------------------------------------------------------------- GET /groups/list
-
 test('GET /groups/list 200 returns user groups', async () => {
   const seen = [];
   const svc = makeService({
@@ -176,8 +172,6 @@ test('GET /groups/list is matched before /groups/:groupId (route ordering)', asy
   assert.equal(detailsCalled, false);
   assert.equal(res.body.groups[0].groupId, 'OK');
 });
-
-// ---------------------------------------------------------------- GET /groups/:groupId
 
 test('GET /groups/:groupId 200 returns details', async () => {
   const seen = [];
@@ -224,8 +218,6 @@ test('GET /groups/:groupId 401 without token', async () => {
   const res = await request(app).get('/groups/G1');
   assert.equal(res.status, 401);
 });
-
-// ---------------------------------------------------------------- POST /groups/:groupId/add-member
 
 test('POST /groups/:groupId/add-member 200 adds member', async () => {
   const seen = [];
@@ -286,8 +278,6 @@ test('POST /groups/:groupId/add-member 409 when already a member', async () => {
   assert.equal(res.body.code, 'already_member');
 });
 
-// ---------------------------------------------------------------- POST /groups/:groupId/remove-member
-
 test('POST /groups/:groupId/remove-member 200 removes member', async () => {
   const seen = [];
   const svc = makeService({
@@ -336,8 +326,6 @@ test('POST /groups/:groupId/remove-member 401 without token', async () => {
   assert.equal(res.status, 401);
 });
 
-// ---------------------------------------------------------------- service unit checks
-
 test('createGroupsService.createGroup emits groupAdded to every member', async () => {
   const { createGroupsService } = require('../src/modules/groups/application/groupsService');
   const events = [];
@@ -368,12 +356,11 @@ test('createGroupsService.createGroup emits groupAdded to every member', async (
   const out = await svc.createGroup({
     userId: 'U1',
     name: 'Team',
-    memberIds: ['U2', 'U3', 'U1'], // duplicates of self should be filtered
+    memberIds: ['U2', 'U3', 'U1'],
   });
   assert.ok(out.group.groupId.length === 5);
   assert.equal(out.members.length, 3);
   assert.equal(memberRows.length, 3);
-  // groupAdded was emitted to each member exactly once
   const groupAdded = events.filter((e) => e.event === 'groupAdded');
   const recipients = groupAdded.map((e) => e.userId).sort();
   assert.deepEqual(recipients, ['U1', 'U2', 'U3']);
@@ -454,7 +441,6 @@ test('createGroupsService.removeMember allows self-removal even for non-admin', 
   const out = await svc.removeMember({ userId: 'U1', groupId: 'G1', memberId: 'U1' });
   assert.deepEqual(deleted, { groupId: 'G1', userId: 'U1' });
   assert.equal(out.removedMemberId, 'U1');
-  // groupRemoved is emitted to the user that left
   const removed = events.find((e) => e.ev === 'groupRemoved');
   assert.ok(removed);
   assert.equal(removed.uid, 'U1');

@@ -8,8 +8,7 @@ const { persistImageDataUrl } = require('../src/interfaces/socket/context/imageS
 
 const ALLOWED = ['image/png', 'image/jpeg', 'image/webp'];
 
-// Each test creates a unique workdir under the OS tmp dir so writes do not
-// pollute the project's /uploads folder. We chdir back at the end.
+// Each test runs under a unique tmp dir to avoid touching /uploads.
 async function withTmpCwd(fn) {
   const original = process.cwd();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'echo-imgstore-'));
@@ -21,8 +20,6 @@ async function withTmpCwd(fn) {
     await fs.rm(dir, { recursive: true, force: true });
   }
 }
-
-// ----------------------------- happy paths -----------------------------
 
 test('PNG data URL is written with .png extension', async () => {
   await withTmpCwd(async (dir) => {
@@ -65,8 +62,6 @@ test('WebP data URL is written with .webp extension', async () => {
   });
 });
 
-// ----------------------------- validation -----------------------------
-
 test('non-string input throws BadRequestError invalid_image', async () => {
   await assert.rejects(
     () => persistImageDataUrl({
@@ -107,7 +102,7 @@ test('SVG (non-allowed MIME) throws invalid_image_type', async () => {
 });
 
 test('payload exceeding maxSize throws image_too_large', async () => {
-  // base64 length 100 → ~75 bytes; set maxSize to 50 to trigger.
+  // base64 length 100 decodes to ~75 bytes; maxSize 50 forces the limit hit.
   const payload = 'A'.repeat(100);
   await assert.rejects(
     () => persistImageDataUrl({

@@ -20,7 +20,7 @@ function makeFakeSocket({ userId = 'U1' } = {}) {
 }
 
 test.beforeEach(() => {
-  // Clear the in-memory buckets between tests so rate-limit state doesn't leak.
+  // Avoid rate-limit state leaking across tests.
   _internal.sendBuckets.clear();
 });
 
@@ -63,14 +63,13 @@ test('deviceEnvelope: ignores events from unauthenticated sockets', () => {
 test('deviceEnvelope: enforces a per-user rate limit', () => {
   const max = 5;
   const userId = 'U-rate';
-  // The handler reads RATE_LIMIT_ENVELOPES_PER_MIN at import time. We can't
-  // override that without re-requiring, so we exercise the helper directly.
+  // RATE_LIMIT_ENVELOPES_PER_MIN is captured at import time, so we test the
+  // helper directly instead of re-requiring the module per test.
   for (let i = 0; i < max; i += 1) {
     assert.equal(_internal.takeTokenForUser(userId, max), true);
   }
   assert.equal(_internal.takeTokenForUser(userId, max), false);
 
-  // Different user has its own bucket.
   assert.equal(_internal.takeTokenForUser('U-other', max), true);
 });
 

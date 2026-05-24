@@ -56,8 +56,6 @@ function makeService(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------- /contacts/add-friend
-
 test('POST /contacts/add-friend returns 200 on success', async () => {
   const seen = [];
   const svc = makeService({
@@ -132,8 +130,6 @@ test('POST /contacts/add-friend 503 when DB unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-// ---------------------------------------------------------------- /contacts/remove-friend
-
 test('POST /contacts/remove-friend returns 200 on success', async () => {
   const seen = [];
   const svc = makeService({
@@ -179,11 +175,7 @@ test('POST /contacts/remove-friend 409 when not friends', async () => {
   assert.equal(res.body.code, 'not_friends');
 });
 
-// ---------------------------------------------------------------- service-level smoke
-
 test('createContactsRouter notifies both participants on add (via notifier)', async () => {
-  // Use the real createContactsService with a stubbed User model and notifier
-  // capture, exercising the emit path end-to-end through HTTP.
   const { createContactsService } = require('../src/modules/contacts/application/contactsService');
 
   const users = {

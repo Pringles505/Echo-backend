@@ -56,8 +56,6 @@ function makeService(overrides = {}) {
   };
 }
 
-// ---------------------------------------------------------------- /messages/check
-
 test('POST /messages/check 200 returns exists flag', async () => {
   const seen = [];
   const svc = makeService({
@@ -110,8 +108,6 @@ test('POST /messages/check 503 when DB unavailable', async () => {
   assert.equal(res.body.code, 'database_unavailable');
 });
 
-// ---------------------------------------------------------------- /messages/latest-number
-
 test('POST /messages/latest-number 200 returns messageNumber', async () => {
   const svc = makeService({
     getLatestMessageNumber: async () => ({ messageNumber: 7 }),
@@ -144,8 +140,6 @@ test('POST /messages/latest-number 400 when targetUserId missing', async () => {
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'validation_error');
 });
-
-// ---------------------------------------------------------------- /messages/mark-seen
 
 test('POST /messages/mark-seen 200 returns updatedCount', async () => {
   const seen = [];
@@ -187,8 +181,6 @@ test('POST /messages/mark-seen 503 when DB unavailable', async () => {
   assert.equal(res.status, 503);
   assert.equal(res.body.code, 'database_unavailable');
 });
-
-// ---------------------------------------------------------------- service unit checks
 
 test('createMessagingService.markMessagesSeen emits messageSeenUpdate via notifier', async () => {
   const { createMessagingService } = require('../src/modules/messaging/application/messagingService');
