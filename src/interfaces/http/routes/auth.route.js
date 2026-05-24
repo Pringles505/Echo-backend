@@ -170,11 +170,20 @@ function createAuthRouter({
           requestMetadata: requestMetadata(req),
         });
         if (!result || result.success === false) {
+          // PASS THROUGH the real `code` returned by the auth service so the
+          // frontend can distinguish "wrong password" (`invalid_credentials`)
+          // from "this browser/device is not paired yet"
+          // (`device_required` / `device_not_registered` / `device_revoked`
+          // / `device_forbidden`). The route used to hardcode
+          // `invalid_credentials` here, which meant the LoginPage device-sync
+          // CTA could never fire — the user always saw "Invalid credentials"
+          // for what was actually a device-pairing problem.
           return sendHttpError(
             res,
             401,
             result?.error || 'Invalid username or password',
-            'invalid_credentials'
+            result?.code || 'invalid_credentials',
+            result?.details
           );
         }
         const payload = {

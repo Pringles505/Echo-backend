@@ -263,7 +263,8 @@ function createAuthService({
       if (!device) {
         return {
           success: false,
-          error: 'This device is not paired with the account. Sync it from an existing device first.',
+          error:
+            'This device is not paired with the account. Sync it from an existing device first.',
           code: 'device_not_registered',
         };
       }
@@ -277,7 +278,8 @@ function createAuthService({
       if (device.isRevoked) {
         return {
           success: false,
-          error: 'This device has been revoked. Sync it again from an authorized device to restore access.',
+          error:
+            'This device has been revoked. Sync it again from an authorized device to restore access.',
           code: 'device_revoked',
         };
       }

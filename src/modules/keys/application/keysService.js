@@ -337,6 +337,86 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       const needed = computeOpkReplenishNeeded(currentCount);
       return { currentCount, needed };
     },
+
+    /**
+     * Overwrite the authenticated user's published identity bundle:
+     * `publicIdentityKeyX25519`, `publicIdentityKeyEd25519`, `signedPreKey`,
+     * `signature`, and the OPK pool. Used by the frontend "Reset keys"
+     * recovery flow when local ELD privates have drifted out of sync with
+     * what the backend has published (typically after a botched register or
+     * partial device-sync), and every incoming X3DH responder attempt fails
+     * AEAD because peers cache stale public keys.
+     *
+     * IMPORTANT: this is destructive — every peer that cached the OLD
+     * bundle will now fail to encrypt for this user until they re-fetch.
+     * Existing sessions for this user are NOT torn down server-side; the
+     * frontend caller is responsible for clearing any local conversation
+     * scaffolding (root keys, chain keys, ephemerals) if it wants peers'
+     * subsequent re-X3DH attempts to start clean. The endpoint exists to
+     * make the dev/test loop unblockable; for production it should be
+     * gated behind a real "I lost my device, rotate everything" flow.
+     *
+     * @param {object} input
+     * @param {string} input.userId
+     * @param {object} input.keyBundle
+     * @param {string} input.keyBundle.publicIdentityKeyX25519
+     * @param {string} input.keyBundle.publicIdentityKeyEd25519
+     * @param {[string, string]} input.keyBundle.publicSignedPreKey - tuple [pub, signature]
+     * @param {Array<{opkId: string, opkPub?: string, publicKey?: string}>} input.keyBundle.oneTimePreKeys
+     * @returns {Promise<{ replaced: true, opkCount: number }>}
+     */
+    async republishIdentity({ userId, keyBundle } = {}) {
+      const authedUserId = String(userId ?? '');
+      if (!authedUserId) throw new UnauthorizedError('Unauthorized', 'unauthorized');
+      if (!keyBundle || typeof keyBundle !== 'object') {
+        throw new BadRequestError('keyBundle is required', 'validation_error');
+      }
+      const {
+        publicIdentityKeyX25519,
+        publicIdentityKeyEd25519,
+        publicSignedPreKey,
+        oneTimePreKeys,
+      } = keyBundle;
+      if (typeof publicIdentityKeyX25519 !== 'string' || publicIdentityKeyX25519.length === 0) {
+        throw new BadRequestError('publicIdentityKeyX25519 is required', 'validation_error');
+      }
+      if (typeof publicIdentityKeyEd25519 !== 'string' || publicIdentityKeyEd25519.length === 0) {
+        throw new BadRequestError('publicIdentityKeyEd25519 is required', 'validation_error');
+      }
+      if (!Array.isArray(publicSignedPreKey) || publicSignedPreKey.length < 2) {
+        throw new BadRequestError('publicSignedPreKey must be [pub, signature]', 'validation_error');
+      }
+      const [signedPreKey, signature] = publicSignedPreKey;
+      if (typeof signedPreKey !== 'string' || typeof signature !== 'string') {
+        throw new BadRequestError(
+          'publicSignedPreKey entries must be base64 strings',
+          'validation_error'
+        );
+      }
+
+      const normalizedOpks = normalizeOneTimePreKeysPayload(oneTimePreKeys, OPK_MAX_STORED);
+
+      const result = await User.findOneAndUpdate(
+        { id: authedUserId },
+        {
+          $set: {
+            publicIdentityKeyX25519,
+            publicIdentityKeyEd25519,
+            signedPreKey,
+            signature,
+            // Bump signedPreKeyId so clients caching the old SPK can detect
+            // the change by comparing this id.
+            signedPreKeyId: Date.now(),
+            oneTimePreKeys: normalizedOpks,
+          },
+        },
+        { new: true }
+      );
+
+      if (!result) throw new NotFoundError('User not found', 'user_not_found');
+
+      return { replaced: true, opkCount: normalizedOpks.length };
+    },
   };
 }
 
