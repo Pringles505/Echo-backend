@@ -332,60 +332,43 @@ function registerOpkSocketHandlers(deps) {
     }
   });
 
-  /**
-   * 'rotateSPK' event - Replace the authenticated user's signed pre-key.
-   * Driven by the frontend `rotateSPKIfNeeded` helper which rotates SPKs
-   * older than 30 days. Without this handler, SPK rotation was silently
-   * dropped — leaving long-lived users on an SPK well past its intended
-   * lifetime, weakening forward secrecy for any new X3DH session that
-   * still consumed it.
-   *
-   * @event rotateSPK
-   * @param {{ signedPreKey: string, signature: string, spkId: string }} data
-   *   - signedPreKey: base64 X25519 public pre-key
-   *   - signature: base64 XEdDSA signature over `signedPreKey`
-   *   - spkId: opaque client-generated id (uuid) — stored as the new
-   *     `signedPreKeyId` so consumers can detect rotation
-   * @param {function} callback - Ack: { success: boolean, error?: string }
-   */
-  socket.on('rotateSPK', async (data, callback) => {
-    const ack = typeof callback === 'function' ? callback : () => {};
-    try {
-      const authedUserId = socket.user?.id;
-      if (!authedUserId) return ack({ success: false, error: 'Unauthorized' });
-
-      const { signedPreKey, signature, spkId } = data ?? {};
-      if (typeof signedPreKey !== 'string' || signedPreKey.length === 0) {
-        return ack({ success: false, error: 'signedPreKey is required' });
-      }
-      if (typeof signature !== 'string' || signature.length === 0) {
-        return ack({ success: false, error: 'signature is required' });
-      }
-
-      const result = await User.updateOne(
-        { id: authedUserId },
-        {
-          $set: {
-            signedPreKey,
-            signature,
-            // `signedPreKeyId` is a Number on the User schema in older
-            // versions; coerce the client uuid into something monotonic-ish
-            // by hashing or just storing the timestamp. We use Date.now()
-            // because the value is only used by clients to detect a change.
-            signedPreKeyId: Date.now(),
-          },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        return ack({ success: false, error: 'User not found' });
-      }
-      return ack({ success: true, spkId: spkId ?? null });
-    } catch (error) {
-      console.error('❌ Error rotating SPK:', error);
-      ack({ success: false, error: 'Internal server error' });
-    }
-  });
+  // ──────────────────────────────────────────────────────────────────────────
+  // TODO(spk-rotation): a `rotateSPK` handler was DELIBERATELY removed here.
+  //
+  // The front-end (`utils/spk/rotate.js`) calls `socket.emit('rotateSPK', …)`
+  // expecting an ack. A previous version added the obvious handler — accept
+  // the new SPK, overwrite User.signedPreKey/signature, ack success — and it
+  // broke messaging for existing peers:
+  //
+  //   1. Receiver mounts the Dashboard → `rotateSPKIfNeeded` fires.
+  //   2. Front overwrites the LOCAL private SPK in ELD.
+  //   3. Backend overwrites the public SPK on User.
+  //   4. Any peer who cached the OLD public SPK (from a prior `/keys/bundle`
+  //      or `getPreKeyBundle`) keeps using it to construct X3DH initial
+  //      messages, embedding the OLD `spkId` in the message header.
+  //   5. Receiver tries to respond with the NEW private SPK → derives a
+  //      different shared secret → AES-GCM AEAD check fails → message is
+  //      rejected. Symptoms observed: `aes.js:178 Decryption error:
+  //      Decryption failed` on every incoming `newMessage`.
+  //
+  // Without a handler the front-side `await new Promise(...)` in `rotate.js`
+  // hangs forever waiting for an ack, so `eld.storeIdentityKeys` further
+  // down the function is never reached — the LOCAL SPK is preserved and
+  // messaging keeps working. That is the (admittedly accidental) status quo
+  // we are restoring here while a proper rotation flow is designed.
+  //
+  // Proper fix (followup):
+  //   - Frontend must keep the previous N private SPKs in ELD, keyed by
+  //     `spkId`, so the X3DH responder can look up the right private key
+  //     from `message.spkId` instead of always reading the "current" one.
+  //   - Set `spkCreatedAt` at registration time (RegisterPage.jsx currently
+  //     omits it, so `rotateSPKIfNeeded` thinks the SPK is from 1970 and
+  //     rotates on FIRST Dashboard mount).
+  //   - Backend must store multiple SPKs per user (or a small retired-SPK
+  //     window) so `getPreKeyBundle` peers transitioning over the rotation
+  //     window can still resolve.
+  //   - Only then can this handler be reintroduced.
+  // ──────────────────────────────────────────────────────────────────────────
 
   /**
    * 'publishDeviceKeyBundle' event - Replace the authenticated user's public key material.

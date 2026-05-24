@@ -170,28 +170,58 @@ function createAuthService({
 
       if (Device && deviceId) {
         const primaryDeviceUserId = id;
-        try {
-          await Device.create({
-            deviceId,
-            parentUserId: id,
-            deviceUserId: primaryDeviceUserId,
-            deviceName: deviceName || 'Primary device',
-            ...metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata),
-            isPrimary: true,
-            isRevoked: false,
-            publicIdentityKeyX25519,
-            publicIdentityKeyEd25519,
-            signedPreKey,
-            signedPreKeySignature: signature,
-            provisionedVia: 'registration',
-            lastSeen: new Date(),
-          });
-        } catch (deviceErr) {
-          await user.deleteOne().catch(() => {});
-          throw deviceErr;
+        const deviceIdNanoid = customAlphabet(
+          'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+          24
+        );
+        // The client passes the `deviceId` it has cached in localStorage. In dev
+        // (and the wild) the same browser is regularly used to register multiple
+        // accounts in a row — `getOrCreateDeviceId()` returns the SAME id every
+        // time, so the second registration would collide on Device.deviceId
+        // (E11000) and the previous catch ran `user.deleteOne()` silently. The
+        // user saw a 500 with no clear cause and a brand-new account vanished.
+        //
+        // Fix: on a deviceId collision, mint a fresh server-side deviceId and
+        // retry the insert. The new id is returned to the caller so the client
+        // can replace its local copy via `storage.set(KEYS.DEVICE_ID, …)`. The
+        // user is NEVER rolled back for an avoidable transient collision.
+        let resolvedDeviceId = deviceId;
+        let attempts = 0;
+        const MAX_DEVICE_ID_RETRIES = 4;
+        while (true) {
+          try {
+            await Device.create({
+              deviceId: resolvedDeviceId,
+              parentUserId: id,
+              deviceUserId: primaryDeviceUserId,
+              deviceName: deviceName || 'Primary device',
+              ...metadataSet({ deviceName, platform, userAgent, locale, timezone }, requestMetadata),
+              isPrimary: true,
+              isRevoked: false,
+              publicIdentityKeyX25519,
+              publicIdentityKeyEd25519,
+              signedPreKey,
+              signedPreKeySignature: signature,
+              provisionedVia: 'registration',
+              lastSeen: new Date(),
+            });
+            break;
+          } catch (deviceErr) {
+            const isDuplicateDeviceId =
+              deviceErr?.code === 11000 && deviceErr?.keyPattern?.deviceId;
+            if (isDuplicateDeviceId && attempts < MAX_DEVICE_ID_RETRIES) {
+              attempts += 1;
+              resolvedDeviceId = `device-${deviceIdNanoid()}`;
+              continue;
+            }
+            // Anything else (validation, network, exhausted retries) is a real
+            // failure — roll back the User and surface the original error.
+            await user.deleteOne().catch(() => {});
+            throw deviceErr;
+          }
         }
         await User.updateOne({ id }, { $addToSet: { devices: primaryDeviceUserId } });
-        return { userId: id, deviceId, deviceUserId: primaryDeviceUserId };
+        return { userId: id, deviceId: resolvedDeviceId, deviceUserId: primaryDeviceUserId };
       }
 
       return { userId: id };
