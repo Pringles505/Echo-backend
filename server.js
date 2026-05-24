@@ -105,8 +105,11 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: CORS_ORIGINS,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // Front sends `X-Sync-Target-Token` for /sync/* endpoints (Phase 5.13);
+  // without it the preflight is rejected as "Request header field
+  // x-sync-target-token is not allowed by Access-Control-Allow-Headers".
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Sync-Target-Token', 'X-Device-Id'],
   credentials: true,
 }));
 app.use(express.json({ limit: JSON_LIMIT }));
