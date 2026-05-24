@@ -1,14 +1,3 @@
-/**
- * @module modules/status/application/statusService
- *
- * Public health snapshot for the frontend. Reports:
- *  - mongo: 'up' | 'down' (uses mongoose admin ping when readyState=1)
- *  - uptime: process.uptime() in seconds
- *  - socketConnections: Socket.IO engine clientsCount, if available
- *  - timestamp: ISO8601
- *  - services[]: per-service entries for richer rendering in the frontend
- */
-
 function createStatusService({ mongoose, io } = {}) {
   if (!mongoose) throw new Error('createStatusService requires mongoose');
 

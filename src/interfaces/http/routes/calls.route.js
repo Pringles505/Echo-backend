@@ -1,57 +1,8 @@
-/**
- * @module interfaces/http/routes/calls
- * Voice and video calling REST endpoints.
- *
- * These endpoints mirror the socket-based call lifecycle so HTTP-only clients
- * (mobile background tasks, REST integrations) can drive the same flow. The
- * heavy lifting lives in `callsService`; this layer only validates input,
- * authenticates the caller, and translates domain errors into structured
- * HTTP responses.
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 const { createCallsService } = require('../../../modules/calls/application/callsService');
 
-/**
- * @typedef {object} InitiateCallRequest
- * @property {string} targetUserId - Recipient user ID
- * @property {string} callId - Unique call identifier
- */
-
-/**
- * @typedef {object} CallIdRequest
- * @property {string} callId - Call ID
- */
-
-/**
- * @typedef {object} MediaStateRequest
- * @property {string} targetUserId - Peer user ID
- * @property {('audio'|'video')} mediaType - Which media stream changed
- * @property {boolean} isEnabled - Whether the stream is now enabled
- */
-
-/**
- * @typedef {object} CallResponse
- * @property {boolean} success
- * @property {string} [status] - 'ringing' | 'in-progress' | 'declined' | 'ended' | 'missed'
- * @property {number} [duration] - Duration in seconds (for ended calls)
- * @property {string} [error]
- * @property {string} [code]
- */
-
-/**
- * @param {object} deps
- * @param {object} [deps.callsService] - createCallsService() instance. If absent,
- *   one is built from `models.Call`, `services.callEventService`, and `notifier`.
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} deps.requireAuth
- * @param {object} [deps.models] - { Call }
- * @param {object} [deps.services] - { callEventService }
- * @param {object} [deps.notifier]
- * @returns {import('express').Router}
- */
 function createCallsRouter(deps = {}) {
   const { mongoose, requireAuth, models, services, notifier } = deps;
   if (!mongoose) throw new Error('createCallsRouter requires mongoose');

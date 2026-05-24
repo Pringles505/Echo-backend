@@ -8,19 +8,6 @@ const { registerContactsAccountSocketHandlers } = require('./handlers/contactsAc
 const { registerDeviceSyncSocketHandlers } = require('./handlers/deviceSync.handlers');
 const { registerDeviceEnvelopeSocketHandlers } = require('./handlers/deviceEnvelope.handlers');
 
-/**
- * Public socket adapter entrypoint for binding all runtime handlers.
- * Preserves legacy event names and ack payload contracts.
- * @param {object} deps
- * @param {*} deps.socket
- * @param {*} deps.io
- * @param {Record<string,string>} deps.userSocketMap
- * @param {object} deps.models
- * @param {object} deps.services
- * @param {object} deps.authService
- * @param {object} deps.opkPolicy
- * @param {object} deps.opkLimiter
- */
 function registerSocketHandlers(deps) {
   const { socket, io, userSocketMap, models, services, authService, opkPolicy, opkLimiter, bcrypt, deviceSyncService } = deps;
   const { Message, User, MessageSequence, Group, GroupMember, GroupSequence, KeyPackage, Call, Device } = models;

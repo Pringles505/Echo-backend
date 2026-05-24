@@ -1,28 +1,7 @@
-/**
- * @module modules/calls/application/callsService
- * Application service for HTTP-driven call lifecycle.
- *
- * Mirrors the socket handlers in `src/interfaces/socket/handlers/calls.handlers.js`
- * but exposes a framework-agnostic API consumable from REST routes. Real-time
- * fan-out is delegated to the injected `notifier` adapter, while persistence
- * goes through the Mongoose `Call` model. Synthetic call-event messages are
- * produced by the existing `callEventService` so timeline behaviour stays
- * consistent across transports.
- */
-
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../../../shared/errors');
 
 const RING_TIMEOUT_MS = 30000;
 
-/**
- * @param {object} deps
- * @param {import('mongoose').Model} deps.Call - Call model
- * @param {{ createCallEventMessage: function }} deps.callEventService
- * @param {{ emitToUser: function, isUserOnline: function }} deps.notifier
- * @param {number} [deps.ringTimeoutMs] - Override for the auto-missed timer (tests)
- * @param {function} [deps.scheduleTimeout] - Override for `setTimeout` (tests)
- * @returns {object}
- */
 function createCallsService({
   Call,
   callEventService,
@@ -52,11 +31,7 @@ function createCallsService({
     return call;
   }
 
-  /**
-   * Schedule the 30s auto-miss check. The handler is robust to the call having
-   * been removed/updated meanwhile (it re-reads from the DB and only acts when
-   * status is still 'ringing').
-   */
+  // Re-reads from the DB and only acts when status is still 'ringing'.
   function scheduleMissedCheck(callId) {
     setTimer(async () => {
       try {
@@ -73,11 +48,6 @@ function createCallsService({
   }
 
   return {
-    /**
-     * Create a 'ringing' call and emit `incomingCall` to the target.
-     * @param {{ callerId: string, callerName?: string, targetUserId: string, callId: string }} input
-     * @returns {Promise<{ status: 'ringing' }>}
-     */
     async initiateCall({ callerId, callerName, targetUserId, callId } = {}) {
       if (!callerId) throw new BadRequestError('Missing callerId', 'validation_error');
       if (!targetUserId) throw new BadRequestError('Missing targetUserId', 'validation_error');
@@ -112,11 +82,6 @@ function createCallsService({
       return { status: 'ringing' };
     },
 
-    /**
-     * Accept a ringing call.
-     * @param {{ userId: string, callId: string }} input
-     * @returns {Promise<{ status: 'in-progress' }>}
-     */
     async acceptCall({ userId, callId } = {}) {
       if (!userId) throw new BadRequestError('Missing userId', 'validation_error');
       if (!callId) throw new BadRequestError('Missing callId', 'validation_error');
@@ -132,11 +97,6 @@ function createCallsService({
       return { status: 'in-progress' };
     },
 
-    /**
-     * Decline a ringing call.
-     * @param {{ userId: string, callId: string }} input
-     * @returns {Promise<{ status: 'declined' }>}
-     */
     async declineCall({ userId, callId } = {}) {
       if (!userId) throw new BadRequestError('Missing userId', 'validation_error');
       if (!callId) throw new BadRequestError('Missing callId', 'validation_error');
@@ -156,11 +116,6 @@ function createCallsService({
       return { status: 'declined' };
     },
 
-    /**
-     * End an in-progress call. Calculates duration from `startedAt`.
-     * @param {{ userId: string, callId: string }} input
-     * @returns {Promise<{ status: 'ended', duration: number }>}
-     */
     async endCall({ userId, callId } = {}) {
       if (!userId) throw new BadRequestError('Missing userId', 'validation_error');
       if (!callId) throw new BadRequestError('Missing callId', 'validation_error');
@@ -188,12 +143,6 @@ function createCallsService({
       return { status: 'ended', duration: durationSeconds };
     },
 
-    /**
-     * Forward a media-state change (audio or video) to the peer.
-     * Emits the matching socket event the mobile clients already understand.
-     * @param {{ userId: string, targetUserId: string, mediaType: 'audio'|'video', isEnabled: boolean }} input
-     * @returns {Promise<{ mediaType: string, isEnabled: boolean }>}
-     */
     async updateMediaState({ userId, targetUserId, mediaType, isEnabled } = {}) {
       if (!userId) throw new BadRequestError('Missing userId', 'validation_error');
       if (!targetUserId) throw new BadRequestError('Missing targetUserId', 'validation_error');

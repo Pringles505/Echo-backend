@@ -1,20 +1,5 @@
 const { sendHttpError } = require('../errors/httpErrorResponse');
 
-/**
- * Builds an HTTP middleware that verifies a JWT bearer token using the
- * provided `jwt` module and signing secret. Mirrors the Socket.IO auth
- * flow: extracts and trims `Authorization: Bearer <token>`, verifies it,
- * and attaches the decoded payload to `req.user`.
- *
- * @param {object} deps
- * @param {*} deps.jwt - jsonwebtoken module
- * @param {string} [deps.secretEnv='JWT_SECRET'] - env var name to read secret from
- * @param {*} [deps.User] - Mongoose User model. When provided, requireAdmin
- *   re-reads the role from the DB instead of trusting the JWT payload alone.
- * @param {*} [deps.Device] - Mongoose Device model. When provided, requireAuth
- *   verifies device-bound JWTs are still valid and not revoked.
- * @returns {{ requireAuth: import('express').RequestHandler, optionalAuth: import('express').RequestHandler, requireAdmin: import('express').RequestHandler }}
- */
 function createAuthMiddleware({ jwt, User = null, Device = null, secretEnv = 'JWT_SECRET' } = {}) {
   if (!jwt || typeof jwt.verify !== 'function') {
     throw new Error('createAuthMiddleware requires a jwt module with verify()');
@@ -90,12 +75,8 @@ function createAuthMiddleware({ jwt, User = null, Device = null, secretEnv = 'JW
     });
   };
 
-  /**
-   * Runs `requireAuth` and then asserts the authenticated user has the
-   * `admin` role. When a `User` model is wired into deps, role is re-read
-   * from the DB (defense in depth against stale JWTs). Otherwise it falls
-   * back to `req.user.role` from the JWT payload.
-   */
+  // When a User model is wired in we re-read the role from the DB so a stale
+  // JWT can't keep admin privileges after the role was downgraded.
   const requireAdmin = (req, res, next) => {
     requireAuth(req, res, async (err) => {
       if (err) return next(err);

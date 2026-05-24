@@ -60,10 +60,8 @@ function metadataSet(input = {}, requestMetadata = {}) {
 }
 
 function createPairingService({ PairingSession, Device, User, authService }) {
-  // 32-character alphabet (Crockford-ish: no 0/O/1/I/L) × PAIRING_CODE_LENGTH chars
-  //   8 chars  → ~40 bits entropy (>= the 8-alphanumeric floor requested by audit)
-  //   12 chars → ~60 bits, recommended when surfaced as a typed code
-  // Enforced floor of 8 lives in shared/constants.js.
+  // Crockford-ish 32-char alphabet (no 0/O/1/I/L); 8 chars ≈ 40 bits, 12 ≈ 60 bits.
+  // Minimum length enforced in shared/constants.js.
   const nanoid = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', PAIRING_CODE_LENGTH);
 
   function ensureActive(session) {
@@ -269,7 +267,6 @@ function createPairingService({ PairingSession, Device, User, authService }) {
       return { status: 'rejected' };
     },
 
-    // Called by new device polling after submitRequest — returns token when approved
     async pollResult({ sessionId }) {
       const s = await PairingSession.findOne({ sessionId }).lean();
       if (!s) throw new NotFoundError('Pairing session not found', 'pairing_not_found');

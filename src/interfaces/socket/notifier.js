@@ -1,12 +1,5 @@
-/**
- * Adapter exposing socket-side broadcasting to non-socket call sites
- * (e.g. HTTP routes). Keeps services framework-agnostic by accepting a
- * `notifier` instead of pulling `io`/`userSocketMap` directly.
- *
- * @param {object} deps
- * @param {*} deps.io
- * @param {Record<string,string>} deps.userSocketMap
- */
+// Adapter that lets non-socket call sites (e.g. HTTP routes) broadcast over
+// Socket.IO without depending on `io`/`userSocketMap` directly.
 function createSocketNotifier({ io, userSocketMap }) {
   function emitToUser(userId, event, payload) {
     const socketId = userSocketMap[String(userId ?? '')];
@@ -30,10 +23,7 @@ function createSocketNotifier({ io, userSocketMap }) {
   return { emitToUser, emitToRoom, isUserOnline, listOnlineUserIds };
 }
 
-/**
- * No-op notifier for tests where no real socket layer exists.
- * @returns {ReturnType<typeof createSocketNotifier>}
- */
+// No-op notifier for tests where no real socket layer exists.
 function createNoopNotifier() {
   const events = [];
   return {

@@ -1,11 +1,3 @@
-/**
- * @module modules/support/application/supportService
- *
- * Persists support ticket submissions from the public "contact" form.
- * No outbound email is sent — operators consume tickets from MongoDB or a
- * downstream admin UI.
- */
-
 const { customAlphabet } = require('nanoid');
 const { BadRequestError } = require('../../../shared/errors');
 const {
@@ -33,17 +25,6 @@ function createSupportService({ SupportTicket } = {}) {
   }
 
   return {
-    /**
-     * @param {object} input
-     * @param {string} input.name
-     * @param {string} input.email
-     * @param {string} input.subject
-     * @param {string} input.message
-     * @param {'technical'|'account'|'billing'|'general'} [input.category]
-     * @param {string|null} [input.userId]
-     * @param {string|null} [input.ip]
-     * @param {string|null} [input.userAgent]
-     */
     async submitTicket({
       name,
       email,

@@ -1,24 +1,9 @@
-/**
- * @module modules/contacts/application/contactsService
- *
- * Application service for friend management. Mirrors the `addFriend` and
- * `removeFriend` socket handlers but is framework-agnostic. After a
- * successful mutation the service notifies both participants through the
- * injected notifier so realtime listeners stay in sync regardless of which
- * transport (HTTP or socket) initiated the request.
- */
-
 const {
   BadRequestError,
   NotFoundError,
   ConflictError,
 } = require('../../../shared/errors');
 
-/**
- * @param {object} deps
- * @param {import('mongoose').Model} deps.User
- * @param {{ emitToUser: (userId: string, event: string, payload: object) => boolean }} [deps.notifier]
- */
 function createContactsService({ User, notifier } = {}) {
   if (!User) throw new Error('createContactsService requires User model');
 
@@ -27,20 +12,11 @@ function createContactsService({ User, notifier } = {}) {
     try {
       notifier.emitToUser(userId, event, payload);
     } catch (_err) {
-      // Notifier failures must never break the HTTP response — the mutation
-      // already succeeded and clients can resync via REST.
+      // Notifier failures must never break the HTTP response; clients can resync via REST.
     }
   }
 
   return {
-    /**
-     * List the user's friends as full public profiles. Friend IDs are stored
-     * on the user document as an array of user IDs; resolved in a single
-     * query. Returns an empty array if the user has no friends yet.
-     *
-     * @param {{ userId: string }} input
-     * @returns {Promise<{ contacts: Array<{id, username, aboutme, profilePicture, banner}> }>}
-     */
     async listContacts({ userId }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -60,13 +36,8 @@ function createContactsService({ User, notifier } = {}) {
       return { contacts };
     },
 
-    /**
-     * Add a one-way friendship edge from `userId` → `friendId`.
-     * Note: the original socket handler only mutates `user.friends` (not the
-     * target). We replicate that exact behaviour to keep parity.
-     *
-     * @param {{ userId: string, friendId: string }} input
-     */
+    // One-way friendship edge from `userId` → `friendId`. Matches the socket
+    // handler which only mutates `user.friends`.
     async addFriend({ userId, friendId }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -105,12 +76,7 @@ function createContactsService({ User, notifier } = {}) {
       return { added: true, friendId };
     },
 
-    /**
-     * Remove a friendship edge between `userId` and `friendId`.
-     * Mirrors the socket handler which mutates BOTH sides of the relation.
-     *
-     * @param {{ userId: string, friendId: string }} input
-     */
+    // Mutates BOTH sides of the relation.
     async removeFriend({ userId, friendId }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');

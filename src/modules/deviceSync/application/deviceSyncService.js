@@ -359,8 +359,8 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
 
     async complete({ sessionId, actor, userId = null, targetAccessToken = null, targetDevice = {}, requestMetadata = {} }) {
       if (actor === 'source') {
-        const session = await loadSessionById(sessionId);
         // Allow source completion even if target already completed.
+        const session = await loadSessionById(sessionId);
         if (!session) throw new NotFoundError('Sync session not found', 'sync_session_not_found');
         if (session.status === 'cancelled' || session.status === 'expired') {
           throw new ConflictError('Sync session is no longer active', 'sync_session_inactive');
@@ -380,7 +380,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
         throw new BadRequestError('Unknown completion actor', 'invalid_sync_actor');
       }
 
-      // Target completion: validate token without blocking on 'completed' status (source may have finished first).
+      // Validate target token without blocking on 'completed' (source may have finished first).
       if (!targetAccessToken) {
         throw new ForbiddenError('Missing target session token', 'missing_target_sync_token');
       }
@@ -417,14 +417,13 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
         timezone: targetDevice.timezone || null,
         requestMetadata,
         provisionedVia: 'device-sync',
-        // QR sync completion is the primary user's explicit re-authorization,
-        // so a previously revoked record for the same deviceId is brought back.
+        // QR sync completion counts as explicit re-authorization by the primary
+        // user, so a previously revoked record for the same deviceId is brought back.
         allowReenable: true,
       });
 
       const resolvedDeviceId = deviceRecord?.deviceId || deviceId;
 
-      // Copy the authorization signature to the Device record to avoid loss.
       if (Device && session.deviceAuthorizationSignature) {
         await Device.updateOne(
           { deviceId: resolvedDeviceId },
@@ -452,7 +451,6 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
       };
     },
 
-    // Target uploads the device IK public keys. No private keys.
     async submitTargetDeviceIdentity({ sessionId, targetAccessToken, pubX25519, pubEd25519 }) {
       if (typeof pubX25519 !== 'string' || pubX25519.length === 0) {
         throw new BadRequestError('Missing targetDeviceIdentityPubX25519', 'missing_target_device_identity_x25519');
@@ -461,7 +459,6 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
         throw new BadRequestError('Missing targetDeviceIdentityPubEd25519', 'missing_target_device_identity_ed25519');
       }
       const session = await requireTargetSession(sessionId, targetAccessToken);
-      // Do not allow a different IK to replace an existing one in the session.
       if (session.targetDeviceIdentityPubX25519 && session.targetDeviceIdentityPubX25519 !== pubX25519) {
         throw new ConflictError('Target device IK already set for this session', 'target_device_identity_locked');
       }
@@ -471,7 +468,6 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
       return publicView(session);
     },
 
-    // Source uploads the signature over the target IK public key.
     async submitDeviceAuthorization({ sessionId, userId, deviceAuthorizationSignature }) {
       if (typeof deviceAuthorizationSignature !== 'string' || deviceAuthorizationSignature.length === 0) {
         throw new BadRequestError('Missing deviceAuthorizationSignature', 'missing_device_authorization_signature');

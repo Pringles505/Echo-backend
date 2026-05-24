@@ -1,69 +1,5 @@
-/**
- * Socket event handlers for Signal Protocol pre-keys and One-Time Pre-Keys (OPK).
- * Implements Signal Protocol key bundle distribution and OPK lifecycle management
- * with rate limiting to prevent abuse.
- * @module interfaces/socket/handlers/opk
- */
-
 const { getSocketIp } = require('../context/opkLimiter');
 
-/**
- * @typedef {object} SignedPreKeyResponse
- * @property {boolean} success
- * @property {string} [signedPreKey] - Base64-encoded signed pre-key
- * @property {string} [signature] - Base64-encoded signature
- * @property {number} [spkId] - Signed pre-key ID
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} IdentityKeyResponse
- * @property {boolean} success
- * @property {string} [publicIdentityKeyX25519] - X25519 public key
- * @property {string} [publicIdentityKeyEd25519] - Ed25519 public key
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} PreKeyBundleResponse
- * @property {boolean} success
- * @property {string} [signedPreKey] - Signed pre-key (base64)
- * @property {string} [signature] - SPK signature (base64)
- * @property {Array} [oneTimePreKeys] - Array of available OPKs
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} UploadOPKPayload
- * @property {Array} oneTimePreKeys - Array of OPK objects to upload
- */
-
-/**
- * @typedef {object} OPKStatusResponse
- * @property {boolean} success
- * @property {number} [count] - Current OPK count
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * Registers Socket.IO handlers for Signal Protocol key operations.
- * Enforces rate limiting on key bundle requests to prevent exhaustion attacks.
- *
- * @param {object} deps - Handler dependencies
- * @param {*} deps.socket - Socket.IO socket instance
- * @param {*} deps.io - Socket.IO server instance
- * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
- * @param {import('mongoose').Model} deps.User - User model
- * @param {import('mongoose').Model} [deps.Device] - Device model (optional)
- * @param {function} deps.normalizeOneTimePreKeysPayload - OPK normalization function
- * @param {function} deps.dedupeIncomingOpks - Deduplication function for OPKs
- * @param {function} deps.capToRemainingCapacity - Cap OPKs to available space
- * @param {function} deps.computeOpkReplenishNeeded - Calculate OPKs needed
- * @param {function} deps.estimateOpkCountAfterConsume - Estimate OPK count post-consumption
- * @param {number} deps.OPK_MAX_STORED - Maximum OPKs per user
- * @param {number} deps.OPK_UPLOAD_MAX - Maximum OPKs per upload
- * @param {object} deps.opkLimiter - Rate limiter service
- */
 function registerOpkSocketHandlers(deps) {
   const {
     socket,
@@ -140,11 +76,10 @@ function registerOpkSocketHandlers(deps) {
 
   socket.on('getPreKeyBundle', async ({ targetUserId }, callback) => {
     const requesterId = socket.user?.id;
-    // Lease + per-pair rate limit must be scoped to the requesting *device*,
-    // not the parent account: sibling devices share `socket.user.id` (it's the
-    // parent user id from the JWT), so a user-level pairKey would hand every
-    // sibling the same cached bundle within the 60s lease window, including
-    // the OPK that the first sibling already had the responder consume.
+    // Scope the lease and per-pair limit to the requesting device, not the
+    // parent account: sibling devices share `socket.user.id`, so a user-level
+    // key would hand every sibling the same cached bundle (and OPK) within
+    // the lease window.
     const requesterDeviceId =
       socket.user?.deviceUserId || socket.user?.deviceId || socket.user?.id;
     const targetId = String(targetUserId ?? '');
@@ -332,54 +267,32 @@ function registerOpkSocketHandlers(deps) {
     }
   });
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // TODO(spk-rotation): a `rotateSPK` handler was DELIBERATELY removed here.
-  //
-  // The front-end (`utils/spk/rotate.js`) calls `socket.emit('rotateSPK', …)`
-  // expecting an ack. A previous version added the obvious handler — accept
-  // the new SPK, overwrite User.signedPreKey/signature, ack success — and it
-  // broke messaging for existing peers:
-  //
-  //   1. Receiver mounts the Dashboard → `rotateSPKIfNeeded` fires.
+  // TODO(spk-rotation): a `rotateSPK` handler was deliberately removed.
+  // The frontend (`utils/spk/rotate.js`) calls `socket.emit('rotateSPK', …)`
+  // expecting an ack. A naive handler that just overwrites
+  // User.signedPreKey/signature broke messaging for existing peers:
+  //   1. Receiver mounts Dashboard → `rotateSPKIfNeeded` fires.
   //   2. Front overwrites the LOCAL private SPK in ELD.
   //   3. Backend overwrites the public SPK on User.
-  //   4. Any peer who cached the OLD public SPK (from a prior `/keys/bundle`
-  //      or `getPreKeyBundle`) keeps using it to construct X3DH initial
-  //      messages, embedding the OLD `spkId` in the message header.
-  //   5. Receiver tries to respond with the NEW private SPK → derives a
-  //      different shared secret → AES-GCM AEAD check fails → message is
-  //      rejected. Symptoms observed: `aes.js:178 Decryption error:
-  //      Decryption failed` on every incoming `newMessage`.
-  //
-  // Without a handler the front-side `await new Promise(...)` in `rotate.js`
-  // hangs forever waiting for an ack, so `eld.storeIdentityKeys` further
-  // down the function is never reached — the LOCAL SPK is preserved and
-  // messaging keeps working. That is the (admittedly accidental) status quo
-  // we are restoring here while a proper rotation flow is designed.
-  //
-  // Proper fix (followup):
-  //   - Frontend must keep the previous N private SPKs in ELD, keyed by
-  //     `spkId`, so the X3DH responder can look up the right private key
-  //     from `message.spkId` instead of always reading the "current" one.
-  //   - Set `spkCreatedAt` at registration time (RegisterPage.jsx currently
-  //     omits it, so `rotateSPKIfNeeded` thinks the SPK is from 1970 and
-  //     rotates on FIRST Dashboard mount).
-  //   - Backend must store multiple SPKs per user (or a small retired-SPK
-  //     window) so `getPreKeyBundle` peers transitioning over the rotation
-  //     window can still resolve.
-  //   - Only then can this handler be reintroduced.
-  // ──────────────────────────────────────────────────────────────────────────
+  //   4. Any peer with the OLD cached public SPK keeps using it (and the
+  //      old `spkId`) to build X3DH initial messages.
+  //   5. Receiver responds with the NEW private SPK → different shared
+  //      secret → AES-GCM AEAD fails → every incoming `newMessage` rejected.
+  // Without a handler the front-side `await` hangs and the LOCAL SPK is
+  // preserved, which is the (accidental) status quo while a proper flow is
+  // designed. Proper fix:
+  //   - Frontend keeps the previous N private SPKs in ELD keyed by `spkId`,
+  //     so the X3DH responder picks the right key from message.spkId.
+  //   - Set `spkCreatedAt` at registration time (currently omitted, so
+  //     `rotateSPKIfNeeded` thinks the SPK is from 1970 and rotates on the
+  //     first Dashboard mount).
+  //   - Backend stores multiple SPKs per user (or a retired-SPK window) so
+  //     peers transitioning across a rotation window can still resolve.
+  //   - Only then reintroduce this handler.
 
-  /**
-   * 'publishDeviceKeyBundle' event - Replace the authenticated user's public key material.
-   * Called after replaceCurrentDeviceIdentity (post-sync/pairing) to push new ELD-generated
-   * keys to the server so other devices can run a fresh X3DH against the updated bundle.
-   * Replaces all OPKs because the old OPK private keys no longer exist in ELD.
-   *
-   * @event publishDeviceKeyBundle
-   * @param {{ deviceId: string, deviceName: string, platform: string, keyBundle: object }} data
-   * @param {function} callback - Ack: { success: boolean, error?: string }
-   */
+  // Called after replaceCurrentDeviceIdentity (post-sync/pairing) to push new
+  // ELD-generated keys so other devices can run a fresh X3DH. Replaces all
+  // OPKs because the old OPK private keys no longer exist in ELD.
   socket.on('publishDeviceKeyBundle', async (data, callback) => {
     const ack = typeof callback === 'function' ? callback : () => {};
     try {

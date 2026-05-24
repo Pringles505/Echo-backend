@@ -1,15 +1,6 @@
-/**
- * @module modules/community/application/newsletterService
- *
- * Newsletter subscription ("Sealed Mail"). Idempotent by email — re-subscribing
- * a previously unsubscribed address re-activates it. No outbound email is
- * sent; sending newsletters is a separate concern (out of scope for MVP).
- */
-
 const { BadRequestError } = require('../../../shared/errors');
 
-// RFC 5322 is hard; this is the practical email validator used in most
-// browsers (HTML5 input[type=email] regex). Good enough for signup gating.
+// HTML5 input[type=email] regex.
 const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
 function isValidEmail(value) {
@@ -22,10 +13,6 @@ function createNewsletterService({ NewsletterSubscriber } = {}) {
   }
 
   return {
-    /**
-     * Subscribe (or re-activate) an email address.
-     * @param {{ email: string, source?: string, ip?: string, userAgent?: string }} input
-     */
     async subscribe({ email, source, ip, userAgent } = {}) {
       if (!isValidEmail(email)) {
         throw new BadRequestError('A valid email is required', 'validation_error');

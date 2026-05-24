@@ -1,12 +1,3 @@
-/**
- * Service boundary for creating and emitting synthetic call-event messages.
- * @param {object} deps
- * @param {*} deps.io
- * @param {Record<string,string>} deps.userSocketMap
- * @param {import('mongoose').Model} deps.Call
- * @param {import('mongoose').Model} deps.Message
- * @param {import('mongoose').Model} deps.User
- */
 function createCallEventService({ io, userSocketMap, Call, Message, User }) {
   async function createCallEventMessage({ callId, status, duration = 0 }) {
     try {

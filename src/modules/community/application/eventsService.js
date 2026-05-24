@@ -1,12 +1,3 @@
-/**
- * @module modules/community/application/eventsService
- *
- * Application service for community events (hackathons, workshops, meetups).
- * Public reads are filtered to `status: 'active'`. Registration is gated by
- * capacity and prevents double-registration via a unique compound index on
- * (eventId, userId).
- */
-
 const { customAlphabet } = require('nanoid');
 const {
   BadRequestError,
@@ -54,10 +45,6 @@ function createEventsService({ Event, EventRegistration } = {}) {
   }
 
   return {
-    /**
-     * Public list of upcoming/active events, sorted by startsAt asc.
-     * @param {{ type?: string, status?: string, page?: number, limit?: number }} query
-     */
     async listActiveEvents({ type, status, page, limit } = {}) {
       const filter = {};
       filter.status = VALID_STATUS.includes(status) ? status : 'active';
@@ -97,9 +84,6 @@ function createEventsService({ Event, EventRegistration } = {}) {
       };
     },
 
-    /**
-     * Admin: create a new event/hackathon.
-     */
     async createEvent({
       createdBy,
       title,
@@ -179,14 +163,9 @@ function createEventsService({ Event, EventRegistration } = {}) {
       return doc.toObject();
     },
 
-    /**
-     * Register the authenticated user for an active event.
-     * Capacity is reserved atomically via a conditional `$inc` so concurrent
-     * registrations cannot oversubscribe past `capacity`. The created
-     * registration is the second step; if it fails for any reason the
-     * reservation is rolled back with a compensating `$inc: -1`.
-     * @param {{ eventId: string, userId: string }} input
-     */
+    // Capacity is reserved atomically via a conditional `$inc` so concurrent
+    // registrations cannot oversubscribe past `capacity`. If the registration
+    // insert fails the reservation is rolled back with a compensating `$inc: -1`.
     async registerForEvent({ eventId, userId }) {
       if (!isNonEmptyString(eventId)) {
         throw new BadRequestError('eventId is required', 'validation_error');

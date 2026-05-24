@@ -112,7 +112,6 @@ async function upsertDeviceUser({ User, parentUser, deviceUserId, keyBundle, opk
 
 function createDeviceManagementService({ Device, MessageEnvelope, User, io = null, authService = null }) {
   return {
-    // List all active (non-revoked) devices for a user, returning public bundles
     async listDevices({ parentUserId }) {
       const devices = await Device.find({ parentUserId, isRevoked: false }).lean();
       return devices.filter(isVisibleDevice).map((d) => ({
@@ -139,13 +138,10 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
       }));
     },
 
-    // Non-consuming lookup: return each device's IK_pub + signed-prekey
-    // material + deviceAuthorizationSignature. No OPK is consumed and no
-    // signed-prekey rotation occurs. Used by the X3DH responder when it
-    // needs to look up the sender device's IK_pub by deviceId — the
-    // responder doesn't need a one-time pre-key (the sender already
-    // consumed one to construct the message), and calling
-    // getDeviceBundles here would burn additional OPKs unnecessarily.
+    // Non-consuming lookup used by the X3DH responder: no OPK is consumed and
+    // no signed-prekey rotation occurs. The sender already consumed an OPK to
+    // construct the message, so calling getDeviceBundles here would burn
+    // additional OPKs unnecessarily.
     async getDeviceIdentities({ parentUserId }) {
       const devices = await Device.find({ parentUserId, isRevoked: false }).lean();
       return devices.filter(hasDeviceKeyBundle).map((d) => ({
@@ -161,7 +157,7 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
       }));
     },
 
-    // Return public key bundles for fanout — one OPK consumed per device (best effort)
+    // One OPK consumed per device (best effort).
     async getDeviceBundles({ parentUserId }) {
       const devices = await Device.find({ parentUserId, isRevoked: false }).lean();
       const bundles = [];
@@ -171,7 +167,6 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
           : null;
 
         if (opk) {
-          // Atomically remove consumed OPK
           await Device.updateOne(
             { deviceId: d.deviceId },
             { $pull: { oneTimePreKeys: { opkId: opk.opkId } } }
@@ -194,7 +189,6 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
       return bundles;
     },
 
-    // Upload or replace a device's public key bundle after provisioning.
     // Creates the device record if it doesn't exist (echo-sync-v1 QR case).
     async registerDeviceKeys({ deviceId, requesterId, keyBundle, requestMetadata = {} }) {
       if (!deviceId || !requesterId) throw new BadRequestError('Missing deviceId or requesterId');
@@ -205,8 +199,6 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
       let device = await Device.findOne({ deviceId });
 
       if (!device) {
-        // Device was never formally created (e.g. echo-sync-v1 QR case).
-        // Create a minimal record and add it to the user's devices list.
         const user = await User.findOne({ id: requesterId }).lean();
         if (!user) throw new NotFoundError('User not found', 'user_not_found');
 
@@ -233,20 +225,16 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
         ? keyBundle.oneTimePreKeys.map((o) => ({ opkId: String(o.opkId), opkPub: String(o.opkPub) }))
         : [];
 
-      // Only persist deviceAuthorizationSignature when the bundle carries one.
-      // Omitting it on subsequent re-uploads must not clobber an existing,
-      // verified signature already stored against this device.
+      // Only persist deviceAuthorizationSignature when the bundle carries one
+      // so re-uploads without it don't clobber an existing verified signature.
       const authSig =
         typeof keyBundle.deviceAuthorizationSignature === 'string'
           && keyBundle.deviceAuthorizationSignature.length > 0
             ? keyBundle.deviceAuthorizationSignature
             : null;
 
-      // Build the $set carefully. Falling back to publicIdentityKeyX25519 for
-      // signature-style fields would silently overwrite a previously-valid SPK
-      // signature with a non-signature value whenever a caller (e.g. a
-      // metadata-only heartbeat) omits the signature. Only set a key-material
-      // field when the incoming payload actually carries it.
+      // Only set a key-material field when the incoming payload actually carries
+      // it; otherwise a metadata-only heartbeat would clobber a valid SPK signature.
       const update = {
         ...metadataSet(keyBundle, requestMetadata),
         publicIdentityKeyX25519: keyBundle.publicIdentityKeyX25519,
@@ -305,8 +293,7 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
       device.isRevoked = true;
       await device.save();
 
-      // Real-time kick: terminate any active socket bound to this deviceId.
-      // Iterates the local in-memory socket map (single-node deployment).
+      // Terminate any active socket bound to this deviceId (single-node deployment).
       if (io?.sockets?.sockets) {
         try {
           for (const [, socket] of io.sockets.sockets) {
@@ -331,8 +318,6 @@ function createDeviceManagementService({ Device, MessageEnvelope, User, io = nul
         { $set: { ...metadataSet(metadata, requestMetadata), lastSeen: new Date() } }
       );
     },
-
-    // ── Envelopes ──────────────────────────────────────────────────────────────
 
     async storeEnvelopes({ envelopes, senderDeviceId, logicalSenderId }) {
       if (!Array.isArray(envelopes) || envelopes.length === 0) {

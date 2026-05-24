@@ -2,10 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
-/**
- * Loads environment variables with test-aware precedence.
- * When running with `node --test`, `.env.test` is preferred if present.
- */
 function loadEnv() {
   const envTestPath = path.join(process.cwd(), '.env.test');
   const runningNodeTest = process.argv.includes('--test');
@@ -38,10 +34,7 @@ function resolveMongoUriFromEnv() {
   return '';
 }
 
-/**
- * Validates critical runtime environment variables.
- * In test mode, JWT_SECRET may be injected by tests after dotenv load.
- */
+// In test mode, JWT_SECRET may be injected by tests after dotenv load.
 function validateRuntimeEnv(options = {}) {
   const {
     isNodeTest = process.argv.includes('--test'),

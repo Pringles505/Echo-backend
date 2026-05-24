@@ -1,74 +1,4 @@
-/**
- * Socket event handlers for user contacts, account management, and profile updates.
- * Implements user search, friend management, and profile information updates.
- * @module interfaces/socket/handlers/contactsAccount
- */
-
-/**
- * @typedef {object} SearchUserPayload
- * @property {string} searchTerm - Username to search for
- */
-
-/**
- * @typedef {object} SearchUserAckResponse
- * @property {boolean} success
- * @property {object} [user] - User info if found
- * @property {string} [user.id] - User ID
- * @property {string} [user.username] - Username
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} UpdateUserInfoPayload
- * @property {string} [username] - New username
- * @property {string} [aboutme] - New bio/about text
- * @property {string} [profilePicture] - Profile picture as base64 data URL
- * @property {string} [oldPassword] - Current password for verification
- * @property {string} [newPassword] - New password (requires oldPassword)
- */
-
-/**
- * @typedef {object} UpdateUserInfoAckResponse
- * @property {boolean} success
- * @property {object} [user] - Updated user info if successful
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} GetUserInfoPayload
- * @property {string} userId - User ID to fetch info for
- */
-
-/**
- * @typedef {object} AddFriendPayload
- * @property {string} friendId - User ID to add as friend
- */
-
-/**
- * @typedef {object} RemoveFriendPayload
- * @property {string} friendId - User ID to remove from friends
- */
-
-/**
- * Registers Socket.IO handlers for account and contact management.
- * Enables user search, profile updates, password changes, and friend management.
- *
- * @param {object} deps - Handler dependencies
- * @param {*} deps.socket - Socket.IO socket instance
- * @param {*} deps.io - Socket.IO server instance
- * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
- * @param {import('mongoose').Model} deps.User - User model
- * @param {import('mongoose').Model} deps.Message - Message model
- * @param {*} deps.bcrypt - Bcryptjs module for password operations
- * @param {function} deps.saveProfilePicture - Function to save profile picture
- */
 function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User, Message, bcrypt, saveProfilePicture }) {
-  /**
-   * 'searchUser' event - Search for a user by username.
-   * @event searchUser
-   * @type {SearchUserPayload}
-   * @param {SearchUserAckResponse} callback - Ack callback
-   */
   socket.on('searchUser', async (data, callback) => {
     const username = data.searchTerm;
     try {
@@ -81,13 +11,6 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
     }
   });
 
-  /**
-   * 'updateUserInfo' event - Update authenticated user's profile and account.
-   * Handles username, bio, profile picture, and password changes.
-   * @event updateUserInfo
-   * @type {UpdateUserInfoPayload}
-   * @param {UpdateUserInfoAckResponse} callback - Ack callback
-   */
   socket.on('updateUserInfo', async (data, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return callback?.({ success: false, error: 'unauthorized' });

@@ -1,73 +1,3 @@
-/**
- * Socket event handlers for direct (1-to-1) messaging.
- * Implements replay attack prevention via message sequence numbers.
- * @module interfaces/socket/handlers/directMessaging
- */
-
-/**
- * @typedef {object} MessageSeenPayload
- * @property {string} targetUserId - User ID whose messages were seen
- */
-
-/**
- * @typedef {object} CheckMessagesPayload
- * @property {string} targetUserId - User ID to check conversation with
- */
-
-/**
- * @typedef {object} CheckMessagesAckResponse
- * @property {boolean} success
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} LatestMessageNumberPayload
- * @property {string} targetUserId - User ID in conversation
- */
-
-/**
- * @typedef {object} LatestMessageNumberAckResponse
- * @property {boolean} success
- * @property {number} messageNumber - Last accepted message number
- * @property {string} [error] - Error message if failed
- */
-
-/**
- * @typedef {object} NewMessagePayload
- * @property {boolean} is_initial - Whether this is an initial message
- * @property {string} payload - Encrypted message content (base64)
- * @property {string} nonce - Encryption nonce
- * @property {string} targetUserId - Recipient user ID
- * @property {number} messageNumber - Message counter for replay prevention
- * @property {number} sendingNumber - Signal Protocol sending chain number
- * @property {number} previousSendingNumber - Previous sending chain number
- * @property {string} publicEphemeralKey - Ephemeral key for decryption
- * @property {number} [spkId] - Signed Pre-Key ID
- * @property {number} [opkId] - One-Time Pre-Key ID
- */
-
-/**
- * @typedef {object} NewMessageAckResponse
- * @property {boolean} success
- * @property {string} [error] - Error message if failed ('replay_detected', 'out_of_sync', etc.)
- * @property {number} [lastAccepted] - Last accepted message number if error
- */
-
-/**
- * Registers Socket.IO handlers for direct messaging events.
- * Preserves backward-compatible event contracts for message delivery,
- * seen status tracking, and replay attack prevention.
- *
- * @param {object} deps - Handler dependencies
- * @param {*} deps.socket - Socket.IO socket instance
- * @param {*} deps.io - Socket.IO server instance
- * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
- * @param {import('mongoose').Model} deps.Message - Message model
- * @param {import('mongoose').Model} deps.User - User model
- * @param {import('mongoose').Model} deps.MessageSequence - Message sequence model
- * @param {function} deps.makeConversationKey - Generate conversation ID from user IDs
- * @param {function} deps.ensureConversationSequence - Ensure sequence document exists
- */
 function registerDirectMessagingSocketHandlers(deps) {
   const {
     socket,
@@ -80,12 +10,6 @@ function registerDirectMessagingSocketHandlers(deps) {
     ensureConversationSequence,
   } = deps;
 
-  /**
-   * 'messageSeen' event - Mark messages from a user as seen.
-   * Emits 'messageSeenUpdate' to the sender.
-   * @event messageSeen
-   * @type {MessageSeenPayload}
-   */
   socket.on('messageSeen', async (data) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return;
@@ -107,12 +31,6 @@ function registerDirectMessagingSocketHandlers(deps) {
     }
   });
 
-  /**
-   * 'checkIfMessagesExist' event - Check if any messages exist in a conversation.
-   * @event checkIfMessagesExist
-   * @type {CheckMessagesPayload}
-   * @param {CheckMessagesAckResponse} callback - Ack callback
-   */
   socket.on('checkIfMessagesExist', async (data, callback) => {
     const authedUserId = socket.user?.id;
     const { targetUserId } = data ?? {};
@@ -128,13 +46,6 @@ function registerDirectMessagingSocketHandlers(deps) {
     }
   });
 
-  /**
-   * 'getLatestMessageNumber' event - Get the last accepted message number in a conversation.
-   * Used by clients to sync message ordering.
-   * @event getLatestMessageNumber
-   * @type {LatestMessageNumberPayload}
-   * @param {LatestMessageNumberAckResponse} callback - Ack callback
-   */
   socket.on('getLatestMessageNumber', async (data, callback) => {
     const authedUserId = socket.user?.id;
     const { targetUserId, senderDeviceId, peerDeviceId, senderDeviceUserId, peerDeviceUserId } = data ?? {};
@@ -156,14 +67,6 @@ function registerDirectMessagingSocketHandlers(deps) {
     }
   });
 
-  /**
-   * 'newMessage' event - Receive and persist a new direct message.
-   * Implements replay attack prevention via message sequencing.
-   * Ack response indicates acceptance or failure with reason.
-   * @event newMessage
-   * @type {NewMessagePayload}
-   * @param {NewMessageAckResponse} callback - Ack callback with status
-   */
   socket.on('newMessage', async (data, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return callback?.({ success: false, error: 'unauthorized' });

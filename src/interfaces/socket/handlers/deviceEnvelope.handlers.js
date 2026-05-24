@@ -2,14 +2,10 @@ const { RATE_LIMIT_ENVELOPES_PER_MIN } = require('../../../shared/constants');
 
 const RATE_WINDOW_MS = 60_000;
 
-/**
- * In-memory per-account token bucket. The relay never reads the payload, so
- * this is purely a flood-control mechanism — N envelopes/min per user across
- * all their connected sockets.
- *
- * Fan-in scales by parent userId, not by socket, so a malicious client with
- * many tabs still hits the same bucket.
- */
+// In-memory per-account token bucket. The relay never reads the payload, so
+// this is purely flood control: N envelopes/min per user across all their
+// sockets. Bucket keyed by parent userId so a malicious client with many
+// tabs still hits the same limit.
 const sendBuckets = new Map();
 
 function takeTokenForUser(userId, max = RATE_LIMIT_ENVELOPES_PER_MIN) {
@@ -29,31 +25,19 @@ function takeTokenForUser(userId, max = RATE_LIMIT_ENVELOPES_PER_MIN) {
 
 function isValidEnvelopePayload(payload) {
   if (!payload || typeof payload !== 'object') return false;
-  // The relay does not decode the payload, but we DO require that the payload
-  // carry an opaque `ciphertext` string. Plaintext relay (the C2 finding from
-  // the front audit) is intentionally not supported by this handler.
+  // Require an opaque `ciphertext` string. Plaintext relay is intentionally
+  // unsupported here so a frontend regression can't leak plaintext through
+  // this channel.
   if (typeof payload.ciphertext !== 'string' || payload.ciphertext.length === 0) {
     return false;
   }
   return true;
 }
 
-/**
- * Relays encrypted device-to-device envelopes to all other active devices
- * of the same user account in real time.
- *
- * Every authenticated socket already joins a room named socket.user.id
- * (see presence.handlers.js). Emitting to that room with socket.to()
- * delivers only to OTHER sockets — the sender is excluded automatically.
- *
- * Contract:
- *   - The payload MUST be opaque ciphertext encrypted by the sender device
- *     under a per-recipient Double Ratchet session. The server does not (and
- *     should not) be able to decrypt anything.
- *   - Plaintext payloads are dropped server-side: this prevents accidental
- *     plaintext leakage if a frontend regresses.
- *   - A simple per-user rate limit caps `deviceEnvelope` emits at N/minute.
- */
+// Relays encrypted device-to-device envelopes to the user's other active
+// devices in real time. Every authenticated socket already joins a room
+// named socket.user.id (presence.handlers.js), so `socket.to(userId)`
+// delivers to all OTHER sockets and excludes the sender.
 function registerDeviceEnvelopeSocketHandlers({ socket }) {
   socket.on('deviceEnvelope', (payload) => {
     const userId = socket.user?.id;

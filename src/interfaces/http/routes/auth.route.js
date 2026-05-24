@@ -1,22 +1,7 @@
-/**
- * @module interfaces/http/routes/auth
- * Authentication HTTP endpoints (register, login, refresh, logout).
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 
-/**
- * @param {object} deps
- * @param {object} deps.authService - createAuthService() instance
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} [deps.requireAuth] - required for /auth/logout
- * @param {import('express').RequestHandler} [deps.registerLimiter]
- * @param {import('express').RequestHandler} [deps.loginLimiter]
- * @param {import('express').RequestHandler} [deps.refreshLimiter]
- * @returns {import('express').Router}
- */
 function createAuthRouter({
   authService,
   mongoose,
@@ -170,14 +155,12 @@ function createAuthRouter({
           requestMetadata: requestMetadata(req),
         });
         if (!result || result.success === false) {
-          // PASS THROUGH the real `code` returned by the auth service so the
-          // frontend can distinguish "wrong password" (`invalid_credentials`)
-          // from "this browser/device is not paired yet"
-          // (`device_required` / `device_not_registered` / `device_revoked`
-          // / `device_forbidden`). The route used to hardcode
-          // `invalid_credentials` here, which meant the LoginPage device-sync
-          // CTA could never fire — the user always saw "Invalid credentials"
-          // for what was actually a device-pairing problem.
+          // Pass through the real `code` from authService so the frontend can
+          // distinguish "wrong password" (`invalid_credentials`) from "this
+          // browser/device is not paired" (`device_required`,
+          // `device_not_registered`, `device_revoked`, `device_forbidden`).
+          // Hardcoding `invalid_credentials` here would hide device-pairing
+          // problems and the LoginPage device-sync CTA could never fire.
           return sendHttpError(
             res,
             401,

@@ -1,8 +1,3 @@
-/**
- * @module interfaces/http/routes/community
- * Public community endpoints: events list, event registration, newsletter signup.
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
@@ -13,16 +8,6 @@ const {
   createNewsletterService,
 } = require('../../../modules/community/application/newsletterService');
 
-/**
- * @param {object} deps
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} deps.requireAuth
- * @param {{ Event: any, EventRegistration: any, NewsletterSubscriber: any }} [deps.models]
- * @param {object} [deps.eventsService]
- * @param {object} [deps.newsletterService]
- * @param {{ newsletterLimiter?: any, eventRegisterLimiter?: any }} [deps.rateLimit]
- * @returns {import('express').Router}
- */
 function createCommunityRouter(deps = {}) {
   const {
     mongoose,

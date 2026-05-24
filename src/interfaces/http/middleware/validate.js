@@ -1,18 +1,10 @@
 const { sendHttpError } = require('../errors/httpErrorResponse');
 
-/**
- * Lightweight body validator. Each rule is `{ field, type?, required?, custom? }`.
- *
- *   type: 'string' | 'number' | 'boolean' | 'array' | 'object'
- *   required: boolean (default true)
- *   custom: (value, body) => string | null   -- returns error message if invalid
- *
- * On the first failure, responds with HTTP 400 and a `validation_error` code,
- * exposing the offending field via `details`.
- *
- * @param {Array<object>} rules
- * @returns {import('express').RequestHandler}
- */
+// Rule shape: { field, type?, required = true, custom? }
+//   type:   'string' | 'number' | 'boolean' | 'array' | 'object'
+//   custom: (value, body) => string | null   (error message if invalid)
+// On the first failure, responds 400 with code `validation_error` and the
+// offending field name in `details`.
 function validateBody(rules) {
   return (req, res, next) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -57,11 +49,6 @@ function validateBody(rules) {
   };
 }
 
-/**
- * Asserts the database is connected before letting the request through.
- * @param {*} mongoose
- * @returns {import('express').RequestHandler}
- */
 function requireDatabase(mongoose) {
   return (_req, res, next) => {
     if (mongoose.connection.readyState === 1) return next();

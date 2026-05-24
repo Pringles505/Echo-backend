@@ -1,9 +1,6 @@
 const swaggerUi = require('swagger-ui-express');
 const { buildOpenApiSpec } = require('../../docs/openapi');
 
-/**
- * Mounts Swagger UI and raw OpenAPI JSON for HTTP routes.
- */
 function setupSwagger(app, { basePath = '', includeLegacy = false } = {}) {
   const normalizedBasePath = basePath.endsWith('/')
     ? basePath.slice(0, -1)

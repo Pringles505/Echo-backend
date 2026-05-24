@@ -74,7 +74,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
           },
         },
         schemas: {
-          // ----- Generic envelopes ------------------------------------------
           ErrorResponse: {
             type: 'object',
             required: ['success', 'error'],
@@ -94,7 +93,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
           },
           HealthResponse: { type: 'string', example: 'OK' },
 
-          // ----- Auth -------------------------------------------------------
           KeyBundle: {
             type: 'object',
             required: ['publicIdentityKeyX25519', 'publicIdentityKeyEd25519', 'publicSignedPreKey', 'oneTimePreKeys'],
@@ -194,7 +192,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Users / Contacts -------------------------------------------
           UserProfile: {
             type: 'object',
             properties: {
@@ -256,7 +253,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
           },
           ContactResponse: { $ref: '#/components/schemas/SuccessResponse' },
 
-          // ----- Messages ---------------------------------------------------
           TargetUserRequest: {
             type: 'object',
             required: ['targetUserId'],
@@ -281,7 +277,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Groups -----------------------------------------------------
           CreateGroupRequest: {
             type: 'object',
             required: ['name', 'memberIds'],
@@ -395,7 +390,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Calls ------------------------------------------------------
           InitiateCallRequest: {
             type: 'object',
             required: ['targetUserId', 'callId'],
@@ -430,7 +424,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Keys / OPK -------------------------------------------------
           KeyBundleRequest: {
             type: 'object',
             required: ['targetUserId'],
@@ -514,7 +507,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Blog -------------------------------------------------------
           BlogPostBase: {
             type: 'object',
             properties: {
@@ -566,7 +558,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Community / Events -----------------------------------------
           EventBase: {
             type: 'object',
             properties: {
@@ -630,7 +621,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Newsletter -------------------------------------------------
           NewsletterSubscribeRequest: {
             type: 'object',
             required: ['email'],
@@ -655,7 +645,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Support / Contact ------------------------------------------
           ContactSubmitRequest: {
             type: 'object',
             required: ['name', 'email', 'subject', 'message'],
@@ -683,7 +672,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Banner -----------------------------------------------------
           BannerUpdateRequest: {
             type: 'object',
             required: ['banner'],
@@ -707,7 +695,6 @@ function buildOpenApiSpec({ serverUrl = '/' } = {}) {
             },
           },
 
-          // ----- Status -----------------------------------------------------
           ServicesStatusResponse: {
             type: 'object',
             required: ['success', 'overall', 'services'],

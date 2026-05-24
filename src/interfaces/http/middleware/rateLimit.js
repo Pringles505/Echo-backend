@@ -10,21 +10,15 @@ const standardJsonHandler = (_req, res, _next, options) => {
   });
 };
 
-/**
- * Auth-aware key: when an authenticated user is present (because `requireAuth`
- * ran earlier in the chain) the bucket is scoped to the user id. Anonymous
- * requests fall back to an IPv6-safe IP key.
- */
+// When `requireAuth` ran earlier in the chain we scope the bucket to the user
+// id; anonymous requests fall back to an IPv6-safe IP key.
 function authAwareKey(req, res) {
   return req.user?.id ? `user:${req.user.id}` : ipKeyGenerator(req, res);
 }
 
-/**
- * Rate limiters tuned for auth-sensitive surfaces. Keyed by IP by default.
- * Trust-proxy is disabled by default in Express; if running behind a proxy
- * the host should configure `app.set('trust proxy', ...)` so this works
- * with the actual client IP.
- */
+// Trust-proxy is disabled by default in Express; if running behind a proxy
+// the host should configure `app.set('trust proxy', ...)` so these limiters
+// see the real client IP.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -41,8 +35,8 @@ const registerLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Search: bumped from 30 → 60/min and scoped per-user when authenticated so
-// active users on shared NATs don't trip each other's limits.
+// Search is scoped per-user when authenticated so active users on shared
+// NATs don't trip each other's limits.
 const searchLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -52,9 +46,8 @@ const searchLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Key bundle: bumped from 60 → 120/min and scoped per-user. In E2E messaging
-// each new conversation consumes one bundle, so this needs headroom for
-// users with many active contacts.
+// Key bundle is scoped per-user. In E2E messaging each new conversation
+// consumes one bundle, so this needs headroom for users with many contacts.
 const keyBundleLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,
@@ -65,8 +58,7 @@ const keyBundleLimiter = rateLimit({
 });
 
 // Refresh: the refresh token itself is the proof of identity, so this is
-// keyed by IP. 30/min is plenty for normal token rotation and tight enough
-// to limit refresh-token brute force.
+// keyed by IP — tight enough to limit refresh-token brute force.
 const refreshLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
@@ -75,7 +67,7 @@ const refreshLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Newsletter signup: aggressive anti-spam from anonymous IPs.
+// Newsletter signup: anti-spam from anonymous IPs.
 const newsletterLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -84,7 +76,7 @@ const newsletterLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Contact / support form: same as newsletter — anonymous submissions.
+// Contact / support form: anonymous submissions, same shape as newsletter.
 const contactLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -94,8 +86,7 @@ const contactLimiter = rateLimit({
 });
 
 // Event registration: keyed by authenticated user id to prevent a single
-// user from spamming registrations across events. Falls back to a safe
-// IPv6-aware IP key for requests that somehow slip past requireAuth.
+// user from spamming registrations across events.
 const eventRegisterLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
@@ -105,7 +96,7 @@ const eventRegisterLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Banner uploads are expensive (5-8 MB base64). Keyed per user.
+// Banner uploads carry 5-8 MB of base64 — keyed per user.
 const bannerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -115,7 +106,7 @@ const bannerLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
-// Status endpoint is cheap but should not become a DoS amplifier.
+// Status endpoint is cheap but shouldn't become a DoS amplifier.
 const statusLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,

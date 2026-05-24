@@ -1,8 +1,3 @@
-/**
- * @module interfaces/http/routes/admin
- * Admin-only endpoints. All routes are gated by `requireAdmin`.
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
@@ -11,15 +6,6 @@ const {
   createEventsService,
 } = require('../../../modules/community/application/eventsService');
 
-/**
- * @param {object} deps
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} deps.requireAdmin
- * @param {{ BlogPost: any, Event: any, EventRegistration: any }} [deps.models]
- * @param {object} [deps.blogService]
- * @param {object} [deps.eventsService]
- * @returns {import('express').Router}
- */
 function createAdminRouter(deps = {}) {
   const { mongoose, requireAdmin, models = {} } = deps;
 

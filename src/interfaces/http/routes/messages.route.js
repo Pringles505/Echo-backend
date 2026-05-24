@@ -1,21 +1,8 @@
-/**
- * @module interfaces/http/routes/messages
- * Direct messaging REST endpoints.
- *
- * Mirrors socket events `checkIfMessagesExist`, `getLatestMessageNumber`
- * and `messageSeen` over HTTP. Side-effects (e.g. `messageSeenUpdate`
- * notifications) are forwarded through the injected `notifier` adapter.
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 const { createMessagingService } = require('../../../modules/messaging/application/messagingService');
 
-/**
- * Resolves the messaging service from explicit DI or builds it from the
- * shared `httpDeps` bundle assembled in `server.js`.
- */
 function resolveMessagingService(deps) {
   if (deps?.messagingService) return deps.messagingService;
   const models = deps?.models || {};
@@ -30,13 +17,6 @@ function resolveMessagingService(deps) {
   });
 }
 
-/**
- * @param {object} deps
- * @param {object} [deps.messagingService] - Explicit service (preferred for tests)
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} [deps.requireAuth]
- * @returns {import('express').Router}
- */
 function createMessagesRouter(deps = {}) {
   const messagingService = resolveMessagingService(deps);
   const { mongoose, requireAuth } = deps;

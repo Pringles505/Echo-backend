@@ -1,16 +1,3 @@
-/**
- * Application service for Signal Protocol pre-key and OPK management.
- *
- * Wraps the same domain logic used by the Socket.IO `opk.handlers.js` so the
- * REST surface (`/keys/*`) and the legacy socket events stay behaviorally
- * aligned. The service is pure-ish: it depends on the User model, an OPK
- * policy bag, an OPK rate limiter (the in-memory state shared with the socket
- * layer when the same instance is provided), and an optional notifier for
- * "low OPK" replenishment broadcasts.
- *
- * @module modules/keys/application/keysService
- */
-
 const {
   BadRequestError,
   NotFoundError,
@@ -18,28 +5,6 @@ const {
   UnauthorizedError,
 } = require('../../../shared/errors');
 
-/**
- * Build the keys application service.
- *
- * @param {object} deps
- * @param {import('mongoose').Model} deps.User - User mongoose model
- * @param {object} deps.opkPolicy - OPK policy helpers
- * @param {number} deps.opkPolicy.OPK_MAX_STORED
- * @param {number} deps.opkPolicy.OPK_UPLOAD_MAX
- * @param {function} deps.opkPolicy.normalizeOneTimePreKeysPayload
- * @param {function} deps.opkPolicy.dedupeIncomingOpks
- * @param {function} deps.opkPolicy.capToRemainingCapacity
- * @param {function} deps.opkPolicy.computeOpkReplenishNeeded
- * @param {function} deps.opkPolicy.estimateOpkCountAfterConsume
- * @param {object} deps.opkLimiter - Rate limiter service (from createOpkLimiterService)
- * @param {object} deps.opkLimiter.OPK_BUNDLE_LIMITS
- * @param {object} deps.opkLimiter.opkLimiterState
- * @param {function} deps.opkLimiter.fixedWindowTake
- * @param {function} deps.opkLimiter.logOpkRequest
- * @param {object} [deps.notifier] - Optional notifier (createSocketNotifier()) used to nudge
- *   targets to replenish OPKs when their store is below the low watermark.
- * @returns {object} Service exposing the 6 use cases consumed by the HTTP router.
- */
 function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
   if (!User) throw new Error('createKeysService requires User model');
   if (!opkPolicy) throw new Error('createKeysService requires opkPolicy');
@@ -57,13 +22,7 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
 
   const { OPK_BUNDLE_LIMITS, opkLimiterState, fixedWindowTake, logOpkRequest } = opkLimiter;
 
-  /**
-   * Best-effort replenishment broadcast. Mirrors socket handler behavior; any
-   * failure is swallowed because audit logs aren't load-bearing for the user.
-   *
-   * @param {string} targetUserId
-   * @param {number|null} currentCountOverride
-   */
+  // Best-effort replenishment broadcast; failures are swallowed.
   async function requestOpkReplenishmentIfLow(targetUserId, currentCountOverride = null) {
     if (!notifier || typeof notifier.emitToUser !== 'function') return;
     if (!notifier.isUserOnline?.(targetUserId)) return;
@@ -80,13 +39,6 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
   }
 
   return {
-    /**
-     * Resolve the signed pre-key + signature for a target user.
-     *
-     * @param {object} input
-     * @param {string} input.targetUserId
-     * @returns {Promise<{ signedPreKey: string, signature: string, spkId: number }>}
-     */
     async getSignedPreKey({ targetUserId } = {}) {
       const targetId = String(targetUserId ?? '');
       if (!targetId) throw new BadRequestError('Missing targetUserId', 'invalid_target');
@@ -121,21 +73,6 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       return { publicIdentityKeyEd25519: user.publicIdentityKeyEd25519 };
     },
 
-    /**
-     * Fetch a complete pre-key bundle for the target user, atomically consuming
-     * one OPK if available. Replicates the multi-bucket rate limiting and lease
-     * reuse semantics of `getPreKeyBundle` in opk.handlers.js so HTTP and socket
-     * traffic share the same governance.
-     *
-     * @param {object} input
-     * @param {string} input.requesterId
-     * @param {string} [input.requesterDeviceId]
-     * @param {string} input.targetUserId
-     * @param {string} [input.ip]
-     * @param {string} [input.userAgent]
-     * @returns {Promise<{ bundle: object }>}
-     * @throws {UnauthorizedError|BadRequestError|RateLimitError|NotFoundError}
-     */
     async getPreKeyBundle({ requesterId, requesterDeviceId, targetUserId, ip = '', userAgent = '' } = {}) {
       const reqId = String(requesterId ?? '');
       const targetId = String(targetUserId ?? '');
@@ -144,9 +81,8 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       // same OPK to every sibling within the lease window; after the first
       // sibling's responder consumes it, the rest fail with "OPK private key
       // not found". Scope the lease (and per-pair request bucket) to the
-      // sender's device. Defensively fall back to the parent id when the
-      // device id is absent so unauthenticated/legacy callers still hit *some*
-      // bucket; the requester rate limiter remains account-level.
+      // sender's device, falling back to the parent id when absent so
+      // unauthenticated/legacy callers still hit *some* bucket.
       const reqDeviceId = String(requesterDeviceId ?? requesterId ?? '');
       const pairKey = `${reqDeviceId}:${targetId}`;
 
@@ -285,15 +221,6 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       return { bundle };
     },
 
-    /**
-     * Append OPKs uploaded by the authenticated user, capped to remaining
-     * storage capacity and deduplicated against existing entries.
-     *
-     * @param {object} input
-     * @param {string} input.userId
-     * @param {Array} input.oneTimePreKeys
-     * @returns {Promise<{ stored: number }>}
-     */
     async uploadOneTimePreKeys({ userId, oneTimePreKeys } = {}) {
       const authedUserId = String(userId ?? '');
       if (!authedUserId) throw new UnauthorizedError('Unauthorized', 'unauthorized');
@@ -320,14 +247,6 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       return { stored: capped.length };
     },
 
-    /**
-     * Inspect the OPK pool for the authenticated user and report whether it
-     * needs replenishment.
-     *
-     * @param {object} input
-     * @param {string} input.userId
-     * @returns {Promise<{ currentCount: number, needed: number }>}
-     */
     async getOpkStatus({ userId } = {}) {
       const authedUserId = String(userId ?? '');
       if (!authedUserId) throw new UnauthorizedError('Unauthorized', 'unauthorized');
@@ -338,33 +257,10 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
       return { currentCount, needed };
     },
 
-    /**
-     * Overwrite the authenticated user's published identity bundle:
-     * `publicIdentityKeyX25519`, `publicIdentityKeyEd25519`, `signedPreKey`,
-     * `signature`, and the OPK pool. Used by the frontend "Reset keys"
-     * recovery flow when local ELD privates have drifted out of sync with
-     * what the backend has published (typically after a botched register or
-     * partial device-sync), and every incoming X3DH responder attempt fails
-     * AEAD because peers cache stale public keys.
-     *
-     * IMPORTANT: this is destructive — every peer that cached the OLD
-     * bundle will now fail to encrypt for this user until they re-fetch.
-     * Existing sessions for this user are NOT torn down server-side; the
-     * frontend caller is responsible for clearing any local conversation
-     * scaffolding (root keys, chain keys, ephemerals) if it wants peers'
-     * subsequent re-X3DH attempts to start clean. The endpoint exists to
-     * make the dev/test loop unblockable; for production it should be
-     * gated behind a real "I lost my device, rotate everything" flow.
-     *
-     * @param {object} input
-     * @param {string} input.userId
-     * @param {object} input.keyBundle
-     * @param {string} input.keyBundle.publicIdentityKeyX25519
-     * @param {string} input.keyBundle.publicIdentityKeyEd25519
-     * @param {[string, string]} input.keyBundle.publicSignedPreKey - tuple [pub, signature]
-     * @param {Array<{opkId: string, opkPub?: string, publicKey?: string}>} input.keyBundle.oneTimePreKeys
-     * @returns {Promise<{ replaced: true, opkCount: number }>}
-     */
+    // Overwrites the authenticated user's published identity bundle and OPK pool.
+    // Destructive: every peer that cached the OLD bundle will fail to encrypt
+    // until they re-fetch. Existing sessions are NOT torn down server-side; the
+    // caller is responsible for clearing any local conversation scaffolding.
     async republishIdentity({ userId, keyBundle } = {}) {
       const authedUserId = String(userId ?? '');
       if (!authedUserId) throw new UnauthorizedError('Unauthorized', 'unauthorized');
@@ -404,8 +300,7 @@ function createKeysService({ User, opkPolicy, opkLimiter, notifier } = {}) {
             publicIdentityKeyEd25519,
             signedPreKey,
             signature,
-            // Bump signedPreKeyId so clients caching the old SPK can detect
-            // the change by comparing this id.
+            // Bump so clients caching the old SPK detect the change.
             signedPreKeyId: Date.now(),
             oneTimePreKeys: normalizedOpks,
           },

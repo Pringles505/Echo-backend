@@ -1,10 +1,5 @@
-/**
- * @module interfaces/http/routes/contacts
- * Friend / contact management REST endpoints.
- *
- * Backed by `contactsService`. The OpenAPI `FriendRequest` schema uses
- * `friendId` (NOT `targetUserId`) — that is the canonical request field.
- */
+// The OpenAPI `FriendRequest` schema uses `friendId` (not `targetUserId`) —
+// that is the canonical request field.
 
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
@@ -13,17 +8,6 @@ const {
   createContactsService,
 } = require('../../../modules/contacts/application/contactsService');
 
-/**
- * @param {object} deps
- * @param {object} [deps.contactsService] - Pre-built service. When omitted, a
- *   default one is built from `models.User` + `notifier` so server.js can pass
- *   its `httpDeps` blob unchanged.
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} deps.requireAuth
- * @param {{ emitToUser?: function }} [deps.notifier]
- * @param {{ User: any }} [deps.models]
- * @returns {import('express').Router}
- */
 function createContactsRouter(deps = {}) {
   const { mongoose, requireAuth, notifier, models = {} } = deps;
 

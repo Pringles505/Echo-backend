@@ -1,20 +1,10 @@
-/**
- * @module interfaces/http/routes/blog
- * Public blog read endpoints. Admin writes live in `admin.route.js`.
- */
+// Public blog read endpoints. Admin writes live in `admin.route.js`.
 
 const express = require('express');
 const { requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 const { createBlogService } = require('../../../modules/blog/application/blogService');
 
-/**
- * @param {object} deps
- * @param {*} deps.mongoose
- * @param {{ BlogPost: any }} [deps.models]
- * @param {object} [deps.blogService]
- * @returns {import('express').Router}
- */
 function createBlogRouter(deps = {}) {
   const { mongoose, models = {} } = deps;
   const blogService = deps.blogService || createBlogService({ BlogPost: models.BlogPost });

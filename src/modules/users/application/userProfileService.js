@@ -1,16 +1,3 @@
-/**
- * @module modules/users/application/userProfileService
- *
- * Application service for user profile and account use cases.
- * Mirrors the logic of the `searchUser`, `getUserInfo`, `updateUserInfo`,
- * `deleteAccount`, and `getOnlineUsers` socket handlers, but is framework
- * agnostic — it does not touch socket primitives directly.
- *
- * Throws domain/HTTP errors from `src/shared/errors`. The Express router
- * translates them into structured HTTP responses; socket adapters can wrap
- * the same errors into ack payloads.
- */
-
 const {
   BadRequestError,
   UnauthorizedError,
@@ -18,33 +5,6 @@ const {
   ConflictError,
 } = require('../../../shared/errors');
 
-/**
- * @typedef {object} UpdateProfileChanges
- * @property {string} [username]
- * @property {string} [aboutme]
- * @property {string} [profilePicture] - Base64 data URL (`data:image/...`)
- * @property {string} [oldPassword]
- * @property {string} [newPassword]
- */
-
-/**
- * @typedef {object} PublicUser
- * @property {string} id
- * @property {string} username
- * @property {string} [aboutme]
- * @property {string} [profilePicture]
- * @property {Array<string>} [friends]
- */
-
-/**
- * @param {object} deps
- * @param {import('mongoose').Model} deps.User
- * @param {import('mongoose').Model} [deps.Message]
- * @param {*} deps.bcrypt - bcryptjs module
- * @param {function} [deps.saveProfilePicture] - (dataUrl, userId) => Promise<string>
- * @param {function} [deps.saveBanner] - (dataUrl, userId) => Promise<string>
- * @param {{ listOnlineUserIds: () => string[] }} [deps.notifier]
- */
 function createUserProfileService({
   User,
   Message,
@@ -57,12 +17,8 @@ function createUserProfileService({
   if (!bcrypt) throw new Error('createUserProfileService requires bcrypt');
 
   return {
-    /**
-     * Find a user by exact username. Kept for backward compatibility with the
-     * `searchUser` socket handler.
-     * @param {{ searchTerm: string }} input
-     * @returns {Promise<PublicUser>}
-     */
+    // Exact username match. Kept for backward compatibility with the
+    // `searchUser` socket handler.
     async searchUser({ searchTerm }) {
       if (typeof searchTerm !== 'string' || searchTerm.length === 0) {
         throw new BadRequestError('searchTerm is required', 'validation_error');
@@ -72,22 +28,12 @@ function createUserProfileService({
       return { id: user.id, username: user.username };
     },
 
-    /**
-     * Prefix search by username. Returns up to `limit` matches as full public
-     * profiles (no key material, no friend list — the same shape `getUserById`
-     * exposes minus private fields). Excludes the requester from the results
-     * when `excludeUserId` is provided.
-     *
-     * @param {{ searchTerm: string, limit?: number, excludeUserId?: string }} input
-     * @returns {Promise<{ users: Array<PublicUser> }>}
-     */
     async searchUsers({ searchTerm, limit = 20, excludeUserId = null }) {
       if (typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
         throw new BadRequestError('searchTerm is required', 'validation_error');
       }
       const term = searchTerm.trim();
-      // Escape regex metacharacters so usernames containing `.` or `+` don't
-      // turn the prefix into an unintended pattern.
+      // Escape regex metacharacters so usernames with `.` or `+` are treated as literals.
       const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const filter = { username: { $regex: `^${escaped}`, $options: 'i' } };
       if (excludeUserId) filter.id = { $ne: excludeUserId };
@@ -105,11 +51,6 @@ function createUserProfileService({
     },
 
 
-    /**
-     * Fetch a public user profile by id.
-     * @param {{ userId: string }} input
-     * @returns {Promise<PublicUser>}
-     */
     async getUserById({ userId }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -126,11 +67,6 @@ function createUserProfileService({
       };
     },
 
-    /**
-     * Update the authenticated user's profile/account.
-     * @param {{ userId: string, changes: UpdateProfileChanges }} input
-     * @returns {Promise<PublicUser>}
-     */
     async updateProfile({ userId, changes }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -138,8 +74,6 @@ function createUserProfileService({
       const safe = changes && typeof changes === 'object' ? changes : {};
       const { username, aboutme, profilePicture, oldPassword, newPassword } = safe;
 
-      // Password change preconditions are validated up front so callers get
-      // a clean 400 before any DB work happens.
       if (newPassword && !oldPassword) {
         throw new BadRequestError(
           'oldPassword is required when newPassword is provided',
@@ -193,13 +127,6 @@ function createUserProfileService({
       };
     },
 
-    /**
-     * Update the authenticated user's banner image.
-     * Accepts a base64 data URL and delegates to the injected `saveBanner`
-     * helper which writes a file under `/uploads/banner-...`.
-     * @param {{ userId: string, banner: string }} input
-     * @returns {Promise<{ id: string, username: string, banner: string }>}
-     */
     async updateBanner({ userId, banner }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -231,12 +158,7 @@ function createUserProfileService({
       };
     },
 
-    /**
-     * Permanently delete an account after re-verifying the password
-     * (mitigation for SEC-002: socket-only delete had no proof-of-knowledge).
-     * @param {{ userId: string, password: string }} input
-     * @returns {Promise<{ deleted: true }>}
-     */
+    // Re-verifies the password before deletion.
     async deleteAccount({ userId, password }) {
       if (typeof userId !== 'string' || userId.length === 0) {
         throw new BadRequestError('userId is required', 'validation_error');
@@ -262,10 +184,6 @@ function createUserProfileService({
       return { deleted: true };
     },
 
-    /**
-     * Synchronous list of currently online user IDs as known to the notifier.
-     * @returns {Array<string>}
-     */
     listOnlineUserIds() {
       if (!notifier || typeof notifier.listOnlineUserIds !== 'function') return [];
       const ids = notifier.listOnlineUserIds();

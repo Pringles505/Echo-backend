@@ -1,13 +1,3 @@
-/**
- * @module interfaces/http/routes/users
- * User profile and account REST endpoints.
- *
- * Mirrors the contactsAccount/presence socket handlers as functional REST
- * routes backed by `userProfileService`. Authentication is enforced by the
- * shared `requireAuth` middleware; rate limits and DB readiness are layered
- * with the same primitives as the auth router.
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
@@ -15,22 +5,6 @@ const {
   createUserProfileService,
 } = require('../../../modules/users/application/userProfileService');
 
-/**
- * @param {object} deps
- * @param {object} [deps.userProfileService] - Pre-built service. When omitted,
- *   the router constructs one from `models.User`, `models.Message`, `bcrypt`,
- *   `services.saveProfilePicture`, and `notifier` so the composition root
- *   (server.js) can pass its `httpDeps` blob unchanged.
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} deps.requireAuth
- * @param {import('express').RequestHandler} [deps.searchLimiter]
- * @param {{ listOnlineUserIds: () => string[], emitToUser?: function }} [deps.notifier]
- * @param {{ User: any, Message?: any }} [deps.models]
- * @param {{ saveProfilePicture?: function }} [deps.services]
- * @param {*} [deps.bcrypt]
- * @param {{ searchLimiter?: import('express').RequestHandler }} [deps.rateLimit]
- * @returns {import('express').Router}
- */
 function createUsersRouter(deps = {}) {
   const {
     mongoose,
@@ -259,7 +233,7 @@ function createUsersRouter(deps = {}) {
    *     description: |
    *       Permanently deletes the authenticated account and its messages.
    *       Requires the current password in the request body for proof of
-   *       knowledge (mitigation for SEC-002).
+   *       knowledge.
    *     requestBody:
    *       required: true
    *       content:
@@ -337,8 +311,8 @@ function createUsersRouter(deps = {}) {
     }
   );
 
-  // notifier kept in deps signature for parity / future endpoints; reference
-  // it here so linters don't flag it as unused even when not directly called.
+  // Keep `notifier` referenced so the linter doesn't flag the deps param
+  // as unused when no endpoint here calls it directly.
   void notifier;
 
   return router;

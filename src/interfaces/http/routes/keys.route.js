@@ -1,26 +1,7 @@
-/**
- * @module interfaces/http/routes/keys
- * Signal Protocol pre-key and One-Time Pre-Key (OPK) REST endpoints.
- *
- * Mirrors `src/interfaces/socket/handlers/opk.handlers.js` so HTTP and
- * Socket.IO clients see the same outcomes (including OPK consumption,
- * lease reuse, and multi-bucket rate limiting).
- */
-
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 
-/**
- * Build the Keys router.
- *
- * @param {object} deps
- * @param {object} deps.keysService - createKeysService() instance
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} [deps.requireAuth] - JWT auth middleware
- * @param {import('express').RequestHandler} [deps.keyBundleLimiter] - express-rate-limit (60/min) for /keys/bundle
- * @returns {import('express').Router}
- */
 function createKeysRouter({ keysService, mongoose, requireAuth, keyBundleLimiter } = {}) {
   if (!keysService) throw new Error('createKeysRouter requires keysService');
   if (!mongoose) throw new Error('createKeysRouter requires mongoose');

@@ -1,11 +1,6 @@
-/**
- * @module interfaces/http/routes/groups
- * Group lifecycle and membership REST endpoints.
- *
- * Diverges from the socket equivalent for `GET /groups/:groupId`: the HTTP
- * endpoint never joins a Socket.IO room (room membership remains the
- * client's responsibility via the socket transport).
- */
+// Unlike the socket equivalent, `GET /groups/:groupId` never joins a Socket.IO
+// room — room membership stays the client's responsibility on the socket
+// transport.
 
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
@@ -27,13 +22,6 @@ function resolveGroupsService(deps) {
   });
 }
 
-/**
- * @param {object} deps
- * @param {object} [deps.groupsService] - Explicit service (preferred for tests)
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} [deps.requireAuth]
- * @returns {import('express').Router}
- */
 function createGroupsRouter(deps = {}) {
   const groupsService = resolveGroupsService(deps);
   const { mongoose, requireAuth } = deps;

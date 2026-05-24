@@ -1,13 +1,3 @@
-/**
- * @module modules/groups/application/groupsService
- *
- * Application service for group lifecycle and membership use cases used by
- * the HTTP layer. Mirrors the socket handlers in
- * `src/interfaces/socket/handlers/groups.handlers.js` but is transport
- * agnostic — it never touches `socket`/`io` directly and instead emits
- * through a `notifier` adapter.
- */
-
 const { customAlphabet } = require('nanoid');
 const {
   BadRequestError,
@@ -20,15 +10,6 @@ const GROUP_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const GROUP_ID_SIZE = 5;
 const CREATE_RETRY_LIMIT = 5;
 
-/**
- * @param {object} deps
- * @param {import('mongoose').Model} deps.Group
- * @param {import('mongoose').Model} deps.GroupMember
- * @param {import('mongoose').Model} [deps.GroupSequence]
- * @param {import('mongoose').Model} [deps.User]
- * @param {(groupId:string)=>Promise<*>} deps.ensureGroupSequence
- * @param {{ emitToUser: Function }} deps.notifier
- */
 function createGroupsService({
   Group,
   GroupMember,
@@ -56,19 +37,6 @@ function createGroupsService({
   }
 
   return {
-    /**
-     * Create a new group. Generates a 5-char alphanumeric `groupId`, creates
-     * the Group document, the admin GroupMember + sequence, and inserts a
-     * GroupMember row for each unique invitee. Emits `groupAdded` to every
-     * member through the notifier.
-     *
-     * @param {object} input
-     * @param {string} input.userId - Authenticated user (becomes admin)
-     * @param {string} input.name - Group display name
-     * @param {Array<string>} input.memberIds - Invitee user IDs
-     * @param {boolean} [input.mlsEnabled=false]
-     * @param {string} [input.cipherSuite]
-     */
     async createGroup({ userId, name, memberIds, mlsEnabled, cipherSuite } = {}) {
       const authedUserId = requireUserId(userId);
 
@@ -179,9 +147,6 @@ function createGroupsService({
       }
     },
 
-    /**
-     * List groups the user is currently a member of.
-     */
     async listMyGroups({ userId } = {}) {
       const authedUserId = requireUserId(userId);
 
@@ -213,11 +178,6 @@ function createGroupsService({
       return { groups: result };
     },
 
-    /**
-     * Fetch group details (group, caller membership, full member list with
-     * profile snapshot). Throws ForbiddenError when the caller is not a
-     * member, NotFoundError when the group does not exist.
-     */
     async getGroupDetails({ userId, groupId } = {}) {
       const authedUserId = requireUserId(userId);
       const groupIdStr = String(groupId ?? '').trim();
@@ -272,11 +232,6 @@ function createGroupsService({
       };
     },
 
-    /**
-     * Add a new member to an existing group. Caller must be admin. Emits
-     * `groupAdded` to the new member and `groupMemberAdded` to every other
-     * existing member via the notifier.
-     */
     async addMember({ userId, groupId, memberId } = {}) {
       const authedUserId = requireUserId(userId);
       const groupIdStr = String(groupId ?? '').trim();
@@ -326,7 +281,6 @@ function createGroupsService({
         at: nowIso,
       });
 
-      // existingMembers above projected only leafIndex; refetch userIds for notification
       const peers = await GroupMember.find(
         { groupId: groupIdStr, userId: { $ne: memberIdStr } },
         { userId: 1 },
@@ -349,12 +303,8 @@ function createGroupsService({
       };
     },
 
-    /**
-     * Remove a member from a group. A user can always remove themselves;
-     * otherwise the caller must be admin and the target must not be admin.
-     * Emits `groupRemoved` to the removed user and `groupMemberRemoved` to
-     * the remaining members.
-     */
+    // A user can always remove themselves; otherwise the caller must be admin
+    // and the target must not be admin.
     async removeMember({ userId, groupId, memberId } = {}) {
       const authedUserId = requireUserId(userId);
       const groupIdStr = String(groupId ?? '').trim();

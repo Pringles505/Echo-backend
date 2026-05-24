@@ -3,10 +3,6 @@ const {
   OPK_REQUEST_LOG_TTL,
 } = require('../../../shared/constants');
 
-/**
- * Registers and returns all mongoose models used by the app.
- * This keeps persistence details out of the runtime bootstrap.
- */
 function createModels(mongoose) {
   const userSchema = new mongoose.Schema({
     id: { type: String, unique: true },
@@ -83,7 +79,7 @@ function createModels(mongoose) {
     contentType: { type: String, enum: ['application', 'commit', 'welcome', 'proposal', null], default: null },
     headerB64: { type: String, default: null },
     ciphertextB64: { type: String, default: null },
-    // Item #3: encrypted sender identity blob — server cannot read leaf index from this
+    // encrypted sender identity blob — server cannot read leaf index from this
     encryptedSenderDataB64: { type: String, default: null },
   });
 
@@ -280,20 +276,18 @@ function createModels(mongoose) {
   deviceSyncSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
 
   const keyPackageSchema = new mongoose.Schema({
-    // Item #20: userId is no longer unique alone — one record per (userId, clientId) pair
-    // so multiple devices can publish independent KeyPackages.
+    // One record per (userId, clientId) pair so multiple devices can publish
+    // independent KeyPackages.
     userId: { type: String, required: true, index: true },
-    // Item #20: opaque device/client identifier; null means "only device" (legacy compat).
+    // Opaque device/client identifier; null means "only device" (legacy compat).
     clientId: { type: String, default: null },
-    // Full signed KeyPackage blob (replaces the raw initKeyB64 field).
     keyPackage: { type: mongoose.Schema.Types.Mixed, default: null },
     initKeyB64: { type: String, default: null },
-    // Item #9: pool lifecycle — once consumed for an Add commit the package is retired.
+    // Once consumed for an Add commit the package is retired.
     consumed: { type: Boolean, default: false, index: true },
     createdAt: { type: Date, default: Date.now, index: true },
     updatedAt: { type: Date, default: Date.now },
   });
-  // Compound unique index: one active KeyPackage per (userId, clientId) pair.
   keyPackageSchema.index({ userId: 1, clientId: 1 }, { unique: true });
 
   const blogPostSchema = new mongoose.Schema({

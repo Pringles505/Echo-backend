@@ -10,9 +10,7 @@ const {
 } = require('../../../shared/constants');
 const { UnauthorizedError, BadRequestError } = require('../../../shared/errors');
 
-/**
- * Hash a refresh token with SHA-256. We store the hash, never the plain token.
- */
+// Store the hash, never the plain token.
 function hashToken(plain) {
   return crypto.createHash('sha256').update(plain, 'utf8').digest('hex');
 }
@@ -85,9 +83,6 @@ async function nextSecondaryDeviceUserId(Device, User, mainUserId) {
   return candidate;
 }
 
-/**
- * Application service for authentication use cases.
- */
 function createAuthService({
   User,
   RefreshToken,
@@ -125,10 +120,7 @@ function createAuthService({
   }
 
   return {
-    /**
-     * Register a new user account.
-     * Refresh tokens are not issued here; caller must POST /auth/login.
-     */
+    // Refresh tokens are not issued here; caller must POST /auth/login.
     async register({
       username,
       password,
@@ -227,9 +219,6 @@ function createAuthService({
       return { userId: id };
     },
 
-    /**
-     * Authenticate user, verify the caller's device, and issue access/refresh tokens.
-     */
     async login({
       username,
       password,
@@ -323,9 +312,6 @@ function createAuthService({
       };
     },
 
-    /**
-     * Exchange a valid refresh token for a fresh access+refresh pair.
-     */
     async refresh({ refreshToken, ip, userAgent } = {}) {
       if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
         throw new BadRequestError('refreshToken is required', 'validation_error');
@@ -393,9 +379,6 @@ function createAuthService({
       };
     },
 
-    /**
-     * Revoke a refresh token.
-     */
     async logout({ refreshToken, userId } = {}) {
       if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
         throw new BadRequestError('refreshToken is required', 'validation_error');

@@ -1,55 +1,3 @@
-/**
- * Socket event handlers for voice and video calling.
- * Implements call lifecycle management (initiate, accept, decline, end)
- * and real-time media state synchronization.
- * @module interfaces/socket/handlers/calls
- */
-
-/**
- * @typedef {object} InitiateCallPayload
- * @property {string} targetUserId - Recipient user ID
- * @property {string} callId - Unique call identifier
- */
-
-/**
- * @typedef {object} AcceptCallPayload
- * @property {string} callId - Call ID to accept
- */
-
-/**
- * @typedef {object} DeclineCallPayload
- * @property {string} callId - Call ID to decline
- */
-
-/**
- * @typedef {object} EndCallPayload
- * @property {string} callId - Call ID to end
- */
-
-/**
- * @typedef {object} MediaStatePayload
- * @property {string} targetUserId - Recipient user ID
- * @property {boolean} isEnabled - Media state (audio/video enabled)
- */
-
-/**
- * @typedef {object} CaptionPayload
- * @property {string} targetUserId - Recipient user ID
- * @property {string} callId - Call ID for context
- * @property {string} text - Caption text
- */
-
-/**
- * Registers Socket.IO handlers for call signaling and media state.
- * Manages call lifecycle and real-time caption/media event distribution.
- *
- * @param {object} deps - Handler dependencies
- * @param {*} deps.socket - Socket.IO socket instance
- * @param {*} deps.io - Socket.IO server instance
- * @param {Record<string,string>} deps.userSocketMap - Map of user ID to socket ID
- * @param {import('mongoose').Model} deps.Call - Call model
- * @param {function} deps.createCallEventMessage - Service to create call event records
- */
 function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCallEventMessage }) {
   const ackWith = (callback, payload) => {
     if (typeof callback === 'function') callback(payload);
@@ -63,13 +11,7 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     ackWith(callback, { success: true, ...payload });
   };
 
-  /**
-   * 'initiateCall' event - Initiate a call to another user.
-   * Emits 'incomingCall' to recipient and creates call record with 'ringing' status.
-   * Auto-marks as 'missed' after 30 seconds if not accepted.
-   * @event initiateCall
-   * @type {InitiateCallPayload}
-   */
+  // Auto-marks as 'missed' after 30s if the receiver never accepts.
   socket.on('initiateCall', async ({ targetUserId, callId } = {}, callback) => {
     const callerId = socket.user?.id;
     const callerName = socket.user?.username;
@@ -119,12 +61,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     }
   });
 
-  /**
-   * 'acceptCall' event - Accept an incoming call.
-   * Updates call status to 'in-progress' and notifies caller.
-   * @event acceptCall
-   * @type {AcceptCallPayload}
-   */
   socket.on('acceptCall', async ({ callId } = {}, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return ackError(callback, 'unauthorized', 'unauthorized');
@@ -149,12 +85,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     }
   });
 
-  /**
-   * 'declineCall' event - Decline an incoming call.
-   * Updates call status to 'declined' and notifies caller.
-   * @event declineCall
-   * @type {DeclineCallPayload}
-   */
   socket.on('declineCall', async ({ callId } = {}, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return ackError(callback, 'unauthorized', 'unauthorized');
@@ -183,12 +113,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     }
   });
 
-  /**
-   * 'endCall' event - End an active call.
-   * Calculates duration, updates call status to 'ended', and notifies peer.
-   * @event endCall
-   * @type {EndCallPayload}
-   */
   socket.on('endCall', async ({ callId } = {}, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return ackError(callback, 'unauthorized', 'unauthorized');
@@ -220,12 +144,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     }
   });
 
-  /**
-   * 'videoStateChanged' event - Broadcast video enable/disable.
-   * Notifies peer of local video state change.
-   * @event videoStateChanged
-   * @type {MediaStatePayload}
-   */
   socket.on('videoStateChanged', ({ targetUserId, isEnabled } = {}, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return ackError(callback, 'unauthorized', 'unauthorized');
@@ -240,12 +158,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     ackSuccess(callback);
   });
 
-  /**
-   * 'audioStateChanged' event - Broadcast audio enable/disable.
-   * Notifies peer of local audio state change.
-   * @event audioStateChanged
-   * @type {MediaStatePayload}
-   */
   socket.on('audioStateChanged', ({ targetUserId, isEnabled } = {}, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return ackError(callback, 'unauthorized', 'unauthorized');
@@ -260,12 +172,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     ackSuccess(callback);
   });
 
-  /**
-   * 'captionInterim' event - Send interim (live) caption during call.
-   * Notifies peer of caption text as user speaks (not yet finalized).
-   * @event captionInterim
-   * @type {CaptionPayload}
-   */
   socket.on('captionInterim', ({ targetUserId, callId, text } = {}, callback) => {
     if (typeof text !== 'string' || text.trim().length === 0) {
       return ackError(callback, 'Missing required fields', 'missing_required_fields');
@@ -285,12 +191,6 @@ function registerCallsSocketHandlers({ socket, io, userSocketMap, Call, createCa
     ackSuccess(callback);
   });
 
-  /**
-   * 'captionFinal' event - Send finalized caption during call.
-   * Notifies peer of caption text after speech recognition completes.
-   * @event captionFinal
-   * @type {CaptionPayload}
-   */
   socket.on('captionFinal', ({ targetUserId, callId, text } = {}, callback) => {
     if (typeof text !== 'string' || text.trim().length === 0) {
       return ackError(callback, 'Missing required fields', 'missing_required_fields');

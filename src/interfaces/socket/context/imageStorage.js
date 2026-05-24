@@ -10,29 +10,11 @@ const EXT_BY_MIME = {
   'image/webp': 'webp',
 };
 
-/**
- * Validate, decode, and persist a base64 data URL image.
- *
- * - Parses the actual MIME type from the data URL (does not assume PNG).
- * - Validates the MIME type against an explicit allowlist.
- * - Validates the decoded byte size against a maximum.
- * - Writes the file asynchronously to avoid blocking the event loop on
- *   multi-MB uploads.
- *
- * Throws `BadRequestError` with stable codes so HTTP handlers can map them
- * to 400 responses with a useful `code` field:
- *   - `invalid_image`: not a base64 image data URL
- *   - `invalid_image_type`: MIME type not allowed
- *   - `image_too_large`: decoded size exceeds maxSize
- *
- * @param {object} opts
- * @param {string} opts.dataUrl
- * @param {Array<string>} opts.allowedMimeTypes
- * @param {number} opts.maxSize - max decoded byte size
- * @param {string} opts.filenamePrefix - e.g. 'banner' or 'profile'
- * @param {string} opts.userId
- * @returns {Promise<string>} Public URL `/uploads/<filename>`
- */
+// Throws `BadRequestError` with stable codes so HTTP handlers can map them
+// straight to a 400 with a useful `code` field:
+//   - `invalid_image`:       not a base64 image data URL
+//   - `invalid_image_type`:  MIME type not in `allowedMimeTypes`
+//   - `image_too_large`:     decoded size exceeds `maxSize`
 async function persistImageDataUrl({
   dataUrl,
   allowedMimeTypes,

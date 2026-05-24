@@ -1,52 +1,5 @@
-/**
- * Socket event handlers for group messaging and MLS (Messaging Layer Security) events.
- * Implements group creation, membership management, welcome message distribution,
- * and MLS commit/proposal processing.
- * @module interfaces/socket/handlers/groups
- */
-
 const { customAlphabet } = require('nanoid');
 
-/**
- * @typedef {object} CreateGroupPayload
- * @property {string} groupName - Name of the group to create
- * @property {Array<string>} memberIds - Array of user IDs to add as members
- */
-
-/**
- * @typedef {object} GroupWelcomePayload
- * @property {string} groupId - Group ID
- * @property {Array} welcome - MLS welcome message
- * @property {string} [targetUserId] - Optional recipient user ID
- */
-
-/**
- * @typedef {object} GroupMessagePayload
- * @property {string} groupId - Target group ID
- * @property {string} payload - Encrypted message (base64)
- * @property {number} messageNumber - Message sequence number
- * @property {number} sendingNumber - Signal Protocol sending number
- * @property {number} previousSendingNumber - Previous sending number
- * @property {string} publicEphemeralKey - Ephemeral key for decryption
- * @property {number} [spkId] - Signed Pre-Key ID
- * @property {number} [opkId] - One-Time Pre-Key ID
- */
-
-/**
- * Registers Socket.IO handlers for group messaging and MLS operations.
- * Manages group lifecycle, membership, message distribution, and MLS integration.
- *
- * @param {object} deps - Handler dependencies
- * @param {*} deps.socket - Socket.IO socket instance
- * @param {*} deps.io - Socket.IO server instance
- * @param {import('mongoose').Model} deps.Message - Message model
- * @param {import('mongoose').Model} deps.User - User model
- * @param {import('mongoose').Model} deps.Group - Group model
- * @param {import('mongoose').Model} deps.GroupMember - Group member model
- * @param {import('mongoose').Model} deps.GroupSequence - Group sequence model
- * @param {import('mongoose').Model} deps.KeyPackage - Key package model (for MLS)
- * @param {function} deps.ensureGroupSequence - Ensure group sequence document exists
- */
 function registerGroupsSocketHandlers(deps) {
   const {
     socket,
@@ -386,10 +339,10 @@ function registerGroupsSocketHandlers(deps) {
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!callerMembership || callerMembership.role !== 'admin') return cb?.({ success: false, error: 'forbidden' });
 
-      // For MLS groups, membership DB changes are driven by confirmMlsCommit after the
-      // cryptographic commit has been distributed and applied. addGroupMember only
-      // pre-registers the member with status 'invited' so the server knows to deliver
-      // the Welcome; the status becomes 'active' via confirmMlsCommit.
+      // In MLS groups, addGroupMember only pre-registers the member with
+      // status 'invited' so the server knows to deliver the Welcome. The
+      // status flips to 'active' from confirmMlsCommit, once the commit has
+      // been distributed and applied by every member.
       const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
       if (existing) return cb?.({ success: false, error: 'already_member' });
 
@@ -460,10 +413,10 @@ function registerGroupsSocketHandlers(deps) {
       const nowIso = new Date().toISOString();
 
       if (group.mlsEnabled && !isSelf) {
-        // For MLS groups, the admin flow only pre-stages the removal. The actual DB
-        // mutation (status → 'removed') happens via confirmMlsCommit after the
-        // cryptographic remove commit has been applied by all members.
-        // Self-leave is allowed to complete immediately even in MLS groups.
+        // Admin flow only pre-stages the removal. The status → 'removed'
+        // mutation happens via confirmMlsCommit once the remove commit has
+        // been applied by every member. Self-leave bypasses MLS and
+        // completes immediately.
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
@@ -471,7 +424,6 @@ function registerGroupsSocketHandlers(deps) {
           at: nowIso,
         });
       } else {
-        // Non-MLS groups or self-leave: complete immediately.
         await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
         io.in(memberIdStr).socketsLeave(room);
         io.to(memberIdStr).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
@@ -511,7 +463,7 @@ function registerGroupsSocketHandlers(deps) {
       contentType,
       headerB64,
       ciphertextB64,
-      // Item #3: encrypted sender identity — preferred over plaintext headerB64
+      // Encrypted sender identity — preferred over plaintext headerB64.
       encryptedSenderDataB64,
       epoch,
       senderLeafIndex,
@@ -533,7 +485,7 @@ function registerGroupsSocketHandlers(deps) {
       const isMlsGroup = group.mlsEnabled === true;
       if (isMlsGroup) {
         const validContentTypes = new Set(['application', 'commit', 'welcome']);
-        // Item #3: accept either a plaintext headerB64 (legacy) or encryptedSenderDataB64
+        // Accept either a plaintext headerB64 (legacy) or encryptedSenderDataB64.
         const hasFraming =
           (typeof headerB64 === 'string' && headerB64.length > 0) ||
           (typeof encryptedSenderDataB64 === 'string' && encryptedSenderDataB64.length > 0);
@@ -585,7 +537,6 @@ function registerGroupsSocketHandlers(deps) {
         contentType: isMlsGroup ? contentType : null,
         headerB64: isMlsGroup ? (headerB64 ?? null) : null,
         ciphertextB64: isMlsGroup ? ciphertextB64 : null,
-        // Item #3: persist encrypted sender identity so receivers can use it
         encryptedSenderDataB64: isMlsGroup ? (encryptedSenderDataB64 ?? null) : null,
       });
 
@@ -601,7 +552,6 @@ function registerGroupsSocketHandlers(deps) {
         contentType: message.contentType,
         headerB64: message.headerB64,
         ciphertextB64: message.ciphertextB64,
-        // Item #3: forward encrypted sender identity to all recipients
         encryptedSenderDataB64: message.encryptedSenderDataB64 ?? null,
       };
 
@@ -662,8 +612,8 @@ function registerGroupsSocketHandlers(deps) {
         artifact: welcome,
       });
 
-      // Broadcast to the user's entire socket room so all their devices receive it.
-      // Each device filters by welcome.recipientClientId to decide whether to process.
+      // Broadcast to the user's entire socket room so every device gets a copy;
+      // each device then filters by welcome.recipientClientId locally.
       io.to(recipientUserIdStr).emit('groupWelcome', { groupId: groupIdStr, welcome });
       return cb?.({ success: true, delivered: true });
     } catch (err) {
@@ -724,7 +674,7 @@ function registerGroupsSocketHandlers(deps) {
       ) {
         return cb?.({ success: false, error: 'Forbidden' });
       }
-      // Item #17: reject commits that don't advance the epoch by exactly 1.
+      // Reject commits that don't advance the epoch by exactly 1.
       if (Number.isInteger(commit.epoch) && commit.epoch !== group.epoch + 1) {
         return cb?.({ success: false, error: 'Invalid commit epoch' });
       }
@@ -763,8 +713,8 @@ function registerGroupsSocketHandlers(deps) {
     const userId = String(socket.user?.id ?? '');
     if (!userId) return cb?.({ success: false, error: 'unauthorized' });
 
-    // Item #20: clientId scopes the package to a specific device/session.
-    // null means "default client" for backward compatibility.
+    // `clientId` scopes the package to a specific device/session; null falls
+    // back to a single "default client" for older clients.
     const resolvedClientId = typeof clientId === 'string' && clientId.length > 0 ? clientId : null;
 
     try {
@@ -772,8 +722,8 @@ function registerGroupsSocketHandlers(deps) {
         const blob = JSON.stringify(keyPackage);
         if (blob.length > 16384) return cb?.({ success: false, error: 'KeyPackage too large' });
         const initKey = typeof keyPackage.initKeyB64 === 'string' ? keyPackage.initKeyB64 : null;
-        // Item #9 + #20: upsert by (userId, clientId) so each device has its own package;
-        // reset consumed=false so the refreshed package is eligible for new Add commits.
+        // Upsert by (userId, clientId) so each device keeps its own package;
+        // reset consumed=false so the refreshed package is eligible again.
         await KeyPackage.findOneAndUpdate(
           { userId, clientId: resolvedClientId },
           { $set: { userId, clientId: resolvedClientId, keyPackage, initKeyB64: initKey, consumed: false, updatedAt: new Date() } },
@@ -800,8 +750,8 @@ function registerGroupsSocketHandlers(deps) {
     if (!callerId) return cb?.({ success: false, error: 'unauthorized' });
     try {
       const userIdStr = String(targetId ?? '');
-      // Item #9: prefer a non-consumed package; fall back to any package for backward compat.
-      // Sort by createdAt ascending so oldest packages are consumed first (FIFO pool).
+      // Prefer a non-consumed package; fall back to any package for backward
+      // compat. FIFO order (createdAt asc) so oldest packages get drained first.
       let kp = await KeyPackage.findOne({ userId: userIdStr, consumed: false })
         .sort({ createdAt: 1 })
         .lean();
@@ -810,8 +760,8 @@ function registerGroupsSocketHandlers(deps) {
       }
       if (!kp) return cb?.({ success: false, error: 'KeyPackage not found' });
 
-      // Item #9: atomically mark as consumed when the caller signals it will be used
-      // for an Add commit (consume=true). This prevents KeyPackage reuse.
+      // Atomically mark as consumed when the caller signals it will be used
+      // for an Add commit, so the same KeyPackage can't be reused.
       if (consume === true && !kp.consumed) {
         await KeyPackage.updateOne({ _id: kp._id }, { $set: { consumed: true } });
       }

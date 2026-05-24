@@ -1,11 +1,3 @@
-/**
- * Domain/HTTP error types.
- *
- * Application services throw these so the Express `errorHandler` middleware
- * can map them to consistent HTTP responses (`{ success: false, error, code }`).
- * `status` and `code` are surfaced as-is by the error middleware.
- */
-
 class HttpServiceError extends Error {
   constructor(status, message, code, details) {
     super(message);

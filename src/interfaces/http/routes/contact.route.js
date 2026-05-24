@@ -1,23 +1,11 @@
-/**
- * @module interfaces/http/routes/contact
- * Public contact / support submission endpoint.
- * Internally persists a SupportTicket; the route name follows the brief.
- */
+// Public contact / support submission endpoint. Persists a SupportTicket
+// under the hood; the route name follows the public contract.
 
 const express = require('express');
 const { validateBody, requireDatabase } = require('../middleware/validate');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 const { createSupportService } = require('../../../modules/support/application/supportService');
 
-/**
- * @param {object} deps
- * @param {*} deps.mongoose
- * @param {import('express').RequestHandler} [deps.optionalAuth]
- * @param {{ SupportTicket: any }} [deps.models]
- * @param {object} [deps.supportService]
- * @param {{ contactLimiter?: any }} [deps.rateLimit]
- * @returns {import('express').Router}
- */
 function createContactRouter(deps = {}) {
   const {
     mongoose,

@@ -1,20 +1,7 @@
-/**
- * @module interfaces/http/routes/status
- * Public service status snapshot.
- */
-
 const express = require('express');
 const { sendHttpError } = require('../errors/httpErrorResponse');
 const { createStatusService } = require('../../../modules/status/application/statusService');
 
-/**
- * @param {object} deps
- * @param {*} deps.mongoose
- * @param {*} [deps.io] - Socket.IO server. When present, reports clientsCount.
- * @param {object} [deps.statusService]
- * @param {{ statusLimiter?: any }} [deps.rateLimit]
- * @returns {import('express').Router}
- */
 function createStatusRouter(deps = {}) {
   const { mongoose, io, rateLimit = {} } = deps;
   const statusService = deps.statusService || createStatusService({ mongoose, io });
