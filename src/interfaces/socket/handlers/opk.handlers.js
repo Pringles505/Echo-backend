@@ -371,61 +371,6 @@ function registerOpkSocketHandlers(deps) {
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
-   * 'rotateSPK' event - Replace the authenticated user's signed pre-key.
-   * Driven by the frontend `rotateSPKIfNeeded` helper which rotates SPKs
-   * older than 30 days. Without this handler, SPK rotation was silently
-   * dropped — leaving long-lived users on an SPK well past its intended
-   * lifetime, weakening forward secrecy for any new X3DH session that
-   * still consumed it.
-   *
-   * @event rotateSPK
-   * @param {{ signedPreKey: string, signature: string, spkId: string }} data
-   *   - signedPreKey: base64 X25519 public pre-key
-   *   - signature: base64 XEdDSA signature over `signedPreKey`
-   *   - spkId: opaque client-generated id (uuid) — stored as the new
-   *     `signedPreKeyId` so consumers can detect rotation
-   * @param {function} callback - Ack: { success: boolean, error?: string }
-   */
-  socket.on('rotateSPK', async (data, callback) => {
-    const ack = typeof callback === 'function' ? callback : () => {};
-    try {
-      const authedUserId = socket.user?.id;
-      if (!authedUserId) return ack({ success: false, error: 'Unauthorized' });
-
-      const { signedPreKey, signature, spkId } = data ?? {};
-      if (typeof signedPreKey !== 'string' || signedPreKey.length === 0) {
-        return ack({ success: false, error: 'signedPreKey is required' });
-      }
-      if (typeof signature !== 'string' || signature.length === 0) {
-        return ack({ success: false, error: 'signature is required' });
-      }
-
-      const result = await User.updateOne(
-        { id: authedUserId },
-        {
-          $set: {
-            signedPreKey,
-            signature,
-            // `signedPreKeyId` is a Number on the User schema in older
-            // versions; coerce the client uuid into something monotonic-ish
-            // by hashing or just storing the timestamp. We use Date.now()
-            // because the value is only used by clients to detect a change.
-            signedPreKeyId: Date.now(),
-          },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        return ack({ success: false, error: 'User not found' });
-      }
-      return ack({ success: true, spkId: spkId ?? null });
-    } catch (error) {
-      console.error('❌ Error rotating SPK:', error);
-      ack({ success: false, error: 'Internal server error' });
-    }
-  });
-
-  /**
    * 'publishDeviceKeyBundle' event - Replace the authenticated user's public key material.
    * Called after replaceCurrentDeviceIdentity (post-sync/pairing) to push new ELD-generated
    * keys to the server so other devices can run a fresh X3DH against the updated bundle.

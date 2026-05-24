@@ -284,6 +284,69 @@ function createKeysRouter({ keysService, mongoose, requireAuth, keyBundleLimiter
     }
   });
 
+  /**
+   * @openapi
+   * /keys/identity/republish:
+   *   post:
+   *     tags: [Keys]
+   *     summary: Overwrite the authenticated user's published identity bundle
+   *     description: |
+   *       Destructive recovery endpoint. Replaces the user's published IK
+   *       (X25519 + Ed25519), SPK, signature, and OPK pool with a freshly
+   *       generated bundle from the caller. Use this to recover from cases
+   *       where the local ELD privates have drifted out of sync with the
+   *       published publics (a botched register, partial device-sync, etc.)
+   *       and every X3DH responder attempt fails AEAD.
+   *
+   *       Every peer that cached the previous bundle will need to re-fetch
+   *       before they can encrypt for this user again. Existing sessions
+   *       are NOT torn down server-side; the caller is responsible for
+   *       wiping local conversation scaffolding.
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [keyBundle]
+   *             properties:
+   *               keyBundle:
+   *                 $ref: '#/components/schemas/KeyBundle'
+   *     responses:
+   *       200:
+   *         description: Bundle replaced
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: { type: boolean }
+   *                 replaced: { type: boolean }
+   *                 opkCount: { type: integer }
+   *       400: { $ref: '#/components/responses/BadRequestResponse' }
+   *       401: { $ref: '#/components/responses/UnauthorizedResponse' }
+   *       404: { $ref: '#/components/responses/NotFoundResponse' }
+   *       503: { $ref: '#/components/responses/DatabaseUnavailableResponse' }
+   */
+  router.post(
+    '/keys/identity/republish',
+    auth,
+    dbGuard,
+    validateBody([{ field: 'keyBundle', type: 'object' }]),
+    async (req, res, next) => {
+      try {
+        const userId = req.user?.id;
+        const { replaced, opkCount } = await keysService.republishIdentity({
+          userId,
+          keyBundle: req.body.keyBundle,
+        });
+        return res.json({ success: true, replaced, opkCount });
+      } catch (err) {
+        return handleServiceError(err, res, next);
+      }
+    }
+  );
+
   return router;
 }
 
