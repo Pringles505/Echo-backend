@@ -275,6 +275,13 @@ function registerDirectMessagingSocketHandlers(deps) {
       io.to(authedUserId).emit('newMessage', messageWithProfile);
       if (targetUserIdStr !== authedUserId) {
         io.to(targetUserIdStr).emit('newMessage', messageWithProfile);
+        // Fallback: if the recipient did not join their user-id room (edge
+        // cases with legacy clients), also try their current socket id when
+        // present in the userSocketMap.
+        try {
+          const sid = userSocketMap?.[targetUserIdStr]
+          if (sid) io.to(sid).emit('newMessage', messageWithProfile)
+        } catch { /* non-fatal */ }
       }
 
       ack({ success: true });

@@ -94,6 +94,12 @@ const PRODUCTION_DEFAULT_ORIGINS = [
   'tauri://localhost',
   'http://tauri.localhost',
   'https://tauri.localhost',
+  // Common dev origins so local Vite/CRA can reach a prod backend during
+  // development without needing to fiddle with env on the host.
+  // This is safe alongside credentialed requests because we still enforce
+  // Authorization on protected endpoints.
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
 ];
 
 let CORS_ORIGINS;

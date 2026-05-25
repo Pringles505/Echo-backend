@@ -70,14 +70,21 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
    * @param {SearchUserAckResponse} callback - Ack callback
    */
   socket.on('searchUser', async (data, callback) => {
-    const username = data.searchTerm;
+    const termRaw = data?.searchTerm
+    const term = typeof termRaw === 'string' ? termRaw.trim() : ''
     try {
-      const user = await User.findOne({ username });
-      if (!user) return callback({ success: false, error: 'User not found' });
-      callback({ success: true, user: { id: user.id, username: user.username } });
+      if (!term) return callback({ success: false, error: 'searchTerm is required' })
+      // Try exact username first
+      let user = await User.findOne({ username: term })
+      // Fallback: look up by public id when the caller pasted an id instead of a username
+      if (!user && term.length <= 24) {
+        user = await User.findOne({ id: term })
+      }
+      if (!user) return callback({ success: false, error: 'User not found' })
+      callback({ success: true, user: { id: user.id, username: user.username } })
     } catch (error) {
-      console.error('Error searching user:', error);
-      callback({ success: false, error: 'Internal server error' });
+      console.error('Error searching user:', error)
+      callback({ success: false, error: 'Internal server error' })
     }
   });
 
