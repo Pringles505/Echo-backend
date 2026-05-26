@@ -67,6 +67,7 @@ function registerSocketHandlers(deps) {
     userSocketMap,
     Message,
     User,
+    Device,
     Group,
     GroupMember,
     GroupSequence,

@@ -53,6 +53,7 @@ function registerGroupsSocketHandlers(deps) {
     io,
     Message,
     User,
+    Device,
     Group,
     GroupMember,
     GroupSequence,
@@ -60,48 +61,110 @@ function registerGroupsSocketHandlers(deps) {
     ensureGroupSequence,
   } = deps;
 
+  // Resolve a socket user id to its parent account id.
+  //
+  // After the per-device migration, every device of an account has its own row
+  // in `Device` (with `parentUserId`) and the parent's `User.devices` array
+  // lists each `deviceUserId`. `upsertDeviceUser` ALSO inserts a separate `User`
+  // doc with `id === deviceUserId` (so device profile lookups work) — which
+  // means a naive `User.findOne({ id: <deviceUserId> })` is ambiguous: it would
+  // happily return that device-shaped User and we'd treat the device as its
+  // own account, splitting GroupMember rows between parent-keyed and
+  // device-keyed identifiers.
+  //
+  // Lookup order:
+  //   1) Device.deviceUserId → parentUserId   (authoritative)
+  //   2) User.devices contains the id          (covers legacy / no-Device-row)
+  //   3) Direct User.id match                  (the id IS a parent account)
   const resolveAccountUserId = async (authedUserId) => {
     const authedUserIdStr = String(authedUserId ?? '');
-    if (!authedUserIdStr) return authedUserIdStr;
+    if (!authedUserIdStr) {
+      return { userId: '', resolvedVia: 'empty', deviceUserIds: [] };
+    }
 
-    const directUser = await User.findOne({ id: authedUserIdStr }, { id: 1 }).lean();
+    if (Device) {
+      const device = await Device.findOne(
+        { deviceUserId: authedUserIdStr },
+        { parentUserId: 1 }
+      ).lean();
+      if (device?.parentUserId) {
+        const parent = await User.findOne(
+          { id: String(device.parentUserId) },
+          { id: 1, devices: 1 }
+        ).lean();
+        return {
+          userId: String(device.parentUserId),
+          resolvedVia: 'device',
+          deviceUserIds: parent?.devices ? parent.devices.map(String) : [],
+        };
+      }
+    }
+
+    const parentByDevicesArray = await User.findOne(
+      { devices: authedUserIdStr },
+      { id: 1, devices: 1 }
+    ).lean();
+    if (parentByDevicesArray?.id) {
+      return {
+        userId: String(parentByDevicesArray.id),
+        resolvedVia: 'deviceUserId',
+        deviceUserIds: (parentByDevicesArray.devices ?? []).map(String),
+      };
+    }
+
+    const directUser = await User.findOne(
+      { id: authedUserIdStr },
+      { id: 1, devices: 1 }
+    ).lean();
     if (directUser?.id) {
-      return { userId: authedUserIdStr, resolvedVia: 'direct' };
+      return {
+        userId: authedUserIdStr,
+        resolvedVia: 'direct',
+        deviceUserIds: (directUser.devices ?? []).map(String),
+      };
     }
 
-    const parentUser = await User.findOne({ devices: authedUserIdStr }, { id: 1 }).lean();
-    const parentUserId = parentUser?.id ? String(parentUser.id) : null;
-    if (parentUserId) {
-      return { userId: parentUserId, resolvedVia: 'deviceUserId' };
-    }
-
-    return { userId: authedUserIdStr, resolvedVia: 'none' };
+    return { userId: authedUserIdStr, resolvedVia: 'none', deviceUserIds: [] };
   };
 
+  // Find a (groupId, userId) GroupMember row by trying every identifier the
+  // socket might possibly be keyed under: the resolved parent account id, the
+  // raw JWT id, and each known sibling deviceUserId. Old groups created before
+  // the auth-resolution fix may have rows keyed by deviceUserId; new groups
+  // are parent-keyed. This lookup matches both without forcing a migration.
   const resolveGroupUserId = async (groupId, authedUserId) => {
     const account = await resolveAccountUserId(authedUserId);
     const authedUserIdStr = String(authedUserId ?? '');
 
-    const directMembership = await GroupMember.findOne({
-      groupId,
-      userId: authedUserIdStr,
-    }).lean();
-    if (directMembership) {
-      return { userId: authedUserIdStr, membership: directMembership, resolvedVia: 'direct' };
+    const candidateIds = new Set();
+    if (account.userId) candidateIds.add(account.userId);
+    if (authedUserIdStr) candidateIds.add(authedUserIdStr);
+    for (const did of account.deviceUserIds ?? []) {
+      if (did) candidateIds.add(did);
     }
 
-    if (account.userId === authedUserIdStr) {
+    if (candidateIds.size === 0) {
       return { userId: account.userId, membership: null, resolvedVia: account.resolvedVia };
     }
 
-    const parentMembership = await GroupMember.findOne({
+    const memberships = await GroupMember.find({
       groupId,
-      userId: account.userId,
+      userId: { $in: Array.from(candidateIds) },
     }).lean();
+
+    // Prefer the parent-keyed row when present (the new canonical layout); fall
+    // back to any active row keyed by a sibling/legacy identifier; treat removed
+    // rows as last-resort so the caller can still report the removal reason.
+    const byParent = memberships.find((m) => String(m.userId) === String(account.userId));
+    const activeFallback = memberships.find((m) => m.status !== 'removed');
+    const chosen = byParent ?? activeFallback ?? memberships[0] ?? null;
+
     return {
-      userId: account.userId,
-      membership: parentMembership ?? null,
-      resolvedVia: account.resolvedVia,
+      userId: account.userId || authedUserIdStr,
+      membership: chosen ?? null,
+      resolvedVia: chosen
+        ? (String(chosen.userId) === String(account.userId) ? 'parent' : 'sibling')
+        : account.resolvedVia,
     };
   };
 
@@ -343,15 +406,34 @@ function registerGroupsSocketHandlers(deps) {
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
     try {
       const account = await resolveAccountUserId(authedUserId);
-      const authedUserIdStr = account.userId;
+      const candidateIds = new Set();
+      if (account.userId) candidateIds.add(account.userId);
+      if (authedUserId) candidateIds.add(String(authedUserId));
+      for (const did of account.deviceUserIds ?? []) {
+        if (did) candidateIds.add(did);
+      }
+      // Match rows keyed by either the parent or any sibling deviceUserId so
+      // legacy/pre-resolution groups still show up alongside parent-keyed ones.
       const memberships = await GroupMember.find({
-        userId: authedUserIdStr,
+        userId: { $in: Array.from(candidateIds) },
         status: { $ne: 'removed' },
       }).lean();
-      const groupIds = memberships.map((m) => String(m.groupId)).filter(Boolean);
+      // Dedupe by groupId — prefer the parent-keyed row so the leafIndex/role
+      // reported to the client matches the canonical row.
+      const byGroupId = new Map();
+      for (const m of memberships) {
+        const gid = String(m.groupId ?? '');
+        if (!gid) continue;
+        const existing = byGroupId.get(gid);
+        if (!existing || String(m.userId) === String(account.userId)) {
+          byGroupId.set(gid, m);
+        }
+      }
+      const dedupedMemberships = Array.from(byGroupId.values());
+      const groupIds = dedupedMemberships.map((m) => String(m.groupId)).filter(Boolean);
       const groups = await Group.find({ groupId: { $in: groupIds } }).lean();
       const groupById = new Map(groups.map((g) => [String(g.groupId), g]));
-      const result = memberships.map((m) => {
+      const result = dedupedMemberships.map((m) => {
         const g = groupById.get(String(m.groupId));
         if (!g) return null;
         return {
