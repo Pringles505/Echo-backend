@@ -63,7 +63,10 @@ function registerGroupsSocketHandlers(deps) {
   const emitEventToGroupMembers = async ({ groupId, eventName, payload, excludeUserIds = [] }) => {
     const groupIdStr = String(groupId ?? '');
     const exclude = new Set(excludeUserIds.map((userId) => String(userId ?? '')).filter(Boolean));
-    const members = await GroupMember.find({ groupId: groupIdStr }, { userId: 1 }).lean();
+    const members = await GroupMember.find(
+      { groupId: groupIdStr, status: { $ne: 'removed' } },
+      { userId: 1 }
+    ).lean();
 
     let deliveredCount = 0;
     for (const member of members) {
@@ -144,8 +147,9 @@ function registerGroupsSocketHandlers(deps) {
 
     if (!group) return { ok: false, error: 'Group not found' };
     if (!membership) return { ok: false, error: 'forbidden' };
+    if (membership.status === 'removed') return { ok: false, error: 'removed' };
 
-    const members = await GroupMember.find({ groupId: groupIdStr }).lean();
+    const members = await GroupMember.find({ groupId: groupIdStr, status: { $ne: 'removed' } }).lean();
     const memberIds = members.map((m) => String(m.userId));
     const profiles = await User.find({ id: { $in: memberIds } }, { id: 1, username: 1, profilePicture: 1 }).lean();
     const profileById = new Map(profiles.map((p) => [String(p.id), p]));
@@ -292,7 +296,10 @@ function registerGroupsSocketHandlers(deps) {
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
     try {
       const authedUserIdStr = String(authedUserId);
-      const memberships = await GroupMember.find({ userId: authedUserIdStr }).lean();
+      const memberships = await GroupMember.find({
+        userId: authedUserIdStr,
+        status: { $ne: 'removed' },
+      }).lean();
       const groupIds = memberships.map((m) => String(m.groupId)).filter(Boolean);
       const groups = await Group.find({ groupId: { $in: groupIds } }).lean();
       const groupById = new Map(groups.map((g) => [String(g.groupId), g]));
@@ -348,7 +355,9 @@ function registerGroupsSocketHandlers(deps) {
 
     try {
       const membership = await GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean();
-      if (!membership) return cb?.({ success: false, error: 'forbidden' });
+      if (!membership || membership.status === 'removed') {
+        return cb?.({ success: false, error: membership?.status === 'removed' ? 'removed' : 'forbidden' });
+      }
 
       const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
       const query = {
@@ -379,12 +388,15 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !memberIdStr) return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, callerMembership] = await Promise.all([
+      const [group, callerMembership, sender] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
+        User.findOne({ id: String(authedUserId) }, { username: 1 }).lean(),
       ]);
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!callerMembership || callerMembership.role !== 'admin') return cb?.({ success: false, error: 'forbidden' });
+      if (!callerMembership || callerMembership.status === 'removed' || callerMembership.role !== 'admin') {
+        return cb?.({ success: false, error: 'forbidden' });
+      }
 
       // For MLS groups, membership DB changes are driven by confirmMlsCommit after the
       // cryptographic commit has been distributed and applied. addGroupMember only
@@ -393,7 +405,10 @@ function registerGroupsSocketHandlers(deps) {
       const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
       if (existing) return cb?.({ success: false, error: 'already_member' });
 
-      const existingMembers = await GroupMember.find({ groupId: groupIdStr }, { leafIndex: 1 }).lean();
+      const existingMembers = await GroupMember.find(
+        { groupId: groupIdStr, status: { $ne: 'removed' } },
+        { leafIndex: 1 }
+      ).lean();
       const maxLeafIndex = existingMembers.reduce((max, member) => (Number.isInteger(member.leafIndex) && member.leafIndex > max ? member.leafIndex : max), -1);
       const nextLeafIndex = maxLeafIndex + 1;
 
@@ -442,15 +457,16 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !memberIdStr) return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, callerMembership, targetMembership] = await Promise.all([
+      const [group, callerMembership, targetMembership, remover] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean(),
+        User.findOne({ id: String(authedUserId) }, { username: 1 }).lean(),
       ]);
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!callerMembership) return cb?.({ success: false, error: 'forbidden' });
-      if (!targetMembership) return cb?.({ success: false, error: 'not_a_member' });
+      if (!callerMembership || callerMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
+      if (!targetMembership || targetMembership.status === 'removed') return cb?.({ success: false, error: 'not_a_member' });
 
       const isSelf = String(authedUserId) === memberIdStr;
       const canRemove = isSelf || (callerMembership.role === 'admin' && (targetMembership.role !== 'admin' || isSelf));
@@ -460,25 +476,48 @@ function registerGroupsSocketHandlers(deps) {
       const nowIso = new Date().toISOString();
 
       if (group.mlsEnabled && !isSelf) {
-        // For MLS groups, the admin flow only pre-stages the removal. The actual DB
-        // mutation (status → 'removed') happens via confirmMlsCommit after the
-        // cryptographic remove commit has been applied by all members.
-        // Self-leave is allowed to complete immediately even in MLS groups.
+        // MLS admin-removal: mark the member as removed so subsequent openGroup
+        // calls exclude them. The cryptographic remove commit is broadcast
+        // separately via sendGroupCommit, which advances the epoch.
+        await GroupMember.updateOne(
+          { groupId: groupIdStr, userId: memberIdStr },
+          { $set: { status: 'removed' } }
+        );
+        io.in(memberIdStr).socketsLeave(room);
+        io.to(memberIdStr).emit('groupRemoved', {
+          groupId: groupIdStr,
+          memberId: memberIdStr,
+          removedByUserId: String(authedUserId),
+          removedByUsername: remover?.username ?? null,
+          groupName: group.name,
+          at: nowIso,
+        });
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
           removedByUserId: String(authedUserId),
+          removedByUsername: remover?.username ?? null,
+          groupName: group.name,
           at: nowIso,
         });
       } else {
         // Non-MLS groups or self-leave: complete immediately.
         await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
         io.in(memberIdStr).socketsLeave(room);
-        io.to(memberIdStr).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
+        io.to(memberIdStr).emit('groupRemoved', {
+          groupId: groupIdStr,
+          memberId: memberIdStr,
+          removedByUserId: String(authedUserId),
+          removedByUsername: remover?.username ?? null,
+          groupName: group.name,
+          at: nowIso,
+        });
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
           removedByUserId: String(authedUserId),
+          removedByUsername: remover?.username ?? null,
+          groupName: group.name,
           at: nowIso,
         });
       }
@@ -527,7 +566,7 @@ function registerGroupsSocketHandlers(deps) {
       ]);
       if (!sender) return ack({ success: false, error: 'Sender not found' });
       if (!group) return ack({ success: false, error: 'Group not found' });
-      if (!membership) return ack({ success: false, error: 'Forbidden' });
+      if (!membership || membership.status === 'removed') return ack({ success: false, error: 'Forbidden' });
       if (!groupIdStr) return ack({ success: false, error: 'Missing required fields' });
 
       const isMlsGroup = group.mlsEnabled === true;
@@ -607,7 +646,10 @@ function registerGroupsSocketHandlers(deps) {
 
       io.to(room).emit('newGroupMessage', messageWithProfile);
 
-      const members = await GroupMember.find({ groupId: groupIdStr }, { userId: 1 }).lean();
+      const members = await GroupMember.find(
+        { groupId: groupIdStr, status: { $ne: 'removed' } },
+        { userId: 1 }
+      ).lean();
       for (const m of members) {
         const memberId = String(m?.userId ?? '');
         if (!memberId) continue;
@@ -645,8 +687,10 @@ function registerGroupsSocketHandlers(deps) {
       ]);
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!senderMembership) return cb?.({ success: false, error: 'forbidden' });
-      if (!recipientMembership) return cb?.({ success: false, error: 'Recipient is not a member of the group' });
+      if (!senderMembership || senderMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
+      if (!recipientMembership || recipientMembership.status === 'removed') {
+        return cb?.({ success: false, error: 'Recipient is not a member of the group' });
+      }
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (String(welcome.groupId ?? '') !== groupIdStr) return cb?.({ success: false, error: 'Welcome groupId mismatch' });
       if (String(welcome.recipientUserId ?? '') !== recipientUserIdStr) return cb?.({ success: false, error: 'Welcome recipient mismatch' });
@@ -714,7 +758,7 @@ function registerGroupsSocketHandlers(deps) {
       ]);
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!senderMembership) return cb?.({ success: false, error: 'forbidden' });
+      if (!senderMembership || senderMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (String(commit.groupId ?? '') !== groupIdStr) return cb?.({ success: false, error: 'Commit groupId mismatch' });
       if (
@@ -873,7 +917,7 @@ function registerGroupsSocketHandlers(deps) {
       ]);
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!membership) return cb?.({ success: false, error: 'forbidden' });
+      if (!membership || membership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
       if (String(proposal.groupId ?? '') !== groupIdStr) {
@@ -925,7 +969,7 @@ function registerGroupsSocketHandlers(deps) {
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
-      if (!callerMembership || callerMembership.role !== 'admin') {
+      if (!callerMembership || callerMembership.status === 'removed' || callerMembership.role !== 'admin') {
         return cb?.({ success: false, error: 'forbidden' });
       }
       if (group.epoch + 1 !== epoch) {
@@ -945,7 +989,22 @@ function registerGroupsSocketHandlers(deps) {
         const room = `group:${groupIdStr}`;
         const nowIso = new Date().toISOString();
         io.in(targetUserIdStr).socketsLeave(room);
-        io.to(targetUserIdStr).emit('groupRemoved', { groupId: groupIdStr, at: nowIso });
+        io.to(targetUserIdStr).emit('groupRemoved', {
+          groupId: groupIdStr,
+          memberId: targetUserIdStr,
+          removedByUserId: String(authedUserId),
+          removedByUsername: sender?.username ?? null,
+          groupName: group.name,
+          at: nowIso,
+        });
+        io.to(room).emit('groupMemberRemoved', {
+          groupId: groupIdStr,
+          memberId: targetUserIdStr,
+          removedByUserId: String(authedUserId),
+          removedByUsername: sender?.username ?? null,
+          groupName: group.name,
+          at: nowIso,
+        });
       }
 
       await Group.updateOne({ groupId: groupIdStr }, { $set: { epoch } });

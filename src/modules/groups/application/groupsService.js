@@ -185,7 +185,10 @@ function createGroupsService({
     async listMyGroups({ userId } = {}) {
       const authedUserId = requireUserId(userId);
 
-      const memberships = await GroupMember.find({ userId: authedUserId }).lean();
+      const memberships = await GroupMember.find({
+        userId: authedUserId,
+        status: { $ne: 'removed' },
+      }).lean();
       const groupIds = memberships.map((m) => String(m.groupId)).filter(Boolean);
       const groups = groupIds.length > 0
         ? await Group.find({ groupId: { $in: groupIds } }).lean()
@@ -231,9 +234,14 @@ function createGroupsService({
       ]);
 
       if (!group) throw new NotFoundError('Group not found', 'group_not_found');
-      if (!membership) throw new ForbiddenError('Not a group member', 'forbidden');
+      if (!membership || membership.status === 'removed') {
+        throw new ForbiddenError('Not a group member', 'forbidden');
+      }
 
-      const members = await GroupMember.find({ groupId: groupIdStr }).lean();
+      const members = await GroupMember.find({
+        groupId: groupIdStr,
+        status: { $ne: 'removed' },
+      }).lean();
       const memberIds = members.map((m) => String(m.userId));
       const profiles = User
         ? await User.find({ id: { $in: memberIds } }, { id: 1, username: 1, profilePicture: 1 }).lean()
@@ -294,14 +302,17 @@ function createGroupsService({
         GroupMember.findOne({ groupId: groupIdStr, userId: authedUserId }).lean(),
       ]);
       if (!group) throw new NotFoundError('Group not found', 'group_not_found');
-      if (!callerMembership || callerMembership.role !== 'admin') {
+      if (!callerMembership || callerMembership.status === 'removed' || callerMembership.role !== 'admin') {
         throw new ForbiddenError('Only admins can add members', 'forbidden');
       }
 
       const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
       if (existing) throw new ConflictError('User already a member', 'already_member');
 
-      const existingMembers = await GroupMember.find({ groupId: groupIdStr }, { leafIndex: 1 }).lean();
+      const existingMembers = await GroupMember.find(
+        { groupId: groupIdStr, status: { $ne: 'removed' } },
+        { leafIndex: 1 }
+      ).lean();
       const maxLeafIndex = existingMembers.reduce(
         (max, member) => (Number.isInteger(member.leafIndex) && member.leafIndex > max ? member.leafIndex : max),
         -1,
@@ -367,15 +378,20 @@ function createGroupsService({
         throw new BadRequestError('Missing required field: memberId', 'validation_error', 'memberId');
       }
 
-      const [group, callerMembership, targetMembership] = await Promise.all([
+      const [group, callerMembership, targetMembership, remover] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: authedUserId }).lean(),
         GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean(),
+        User ? User.findOne({ id: authedUserId }, { username: 1 }).lean() : Promise.resolve(null),
       ]);
 
       if (!group) throw new NotFoundError('Group not found', 'group_not_found');
-      if (!callerMembership) throw new ForbiddenError('Not a group member', 'forbidden');
-      if (!targetMembership) throw new NotFoundError('User is not a member', 'not_a_member');
+      if (!callerMembership || callerMembership.status === 'removed') {
+        throw new ForbiddenError('Not a group member', 'forbidden');
+      }
+      if (!targetMembership || targetMembership.status === 'removed') {
+        throw new NotFoundError('User is not a member', 'not_a_member');
+      }
 
       const isSelf = authedUserId === memberIdStr;
       const canRemove = isSelf
@@ -385,7 +401,14 @@ function createGroupsService({
       await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
 
       const nowIso = new Date().toISOString();
-      safeNotify(memberIdStr, 'groupRemoved', { groupId: groupIdStr, at: nowIso });
+      safeNotify(memberIdStr, 'groupRemoved', {
+        groupId: groupIdStr,
+        memberId: memberIdStr,
+        removedByUserId: authedUserId,
+        removedByUsername: remover?.username ?? null,
+        groupName: group.name,
+        at: nowIso,
+      });
 
       const peers = await GroupMember.find(
         { groupId: groupIdStr },
@@ -398,6 +421,8 @@ function createGroupsService({
           groupId: groupIdStr,
           memberId: memberIdStr,
           removedByUserId: authedUserId,
+          removedByUsername: remover?.username ?? null,
+          groupName: group.name,
           at: nowIso,
         });
       }
