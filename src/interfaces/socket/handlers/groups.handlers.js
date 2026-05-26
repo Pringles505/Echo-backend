@@ -60,6 +60,51 @@ function registerGroupsSocketHandlers(deps) {
     ensureGroupSequence,
   } = deps;
 
+  const resolveAccountUserId = async (authedUserId) => {
+    const authedUserIdStr = String(authedUserId ?? '');
+    if (!authedUserIdStr) return authedUserIdStr;
+
+    const directUser = await User.findOne({ id: authedUserIdStr }, { id: 1 }).lean();
+    if (directUser?.id) {
+      return { userId: authedUserIdStr, resolvedVia: 'direct' };
+    }
+
+    const parentUser = await User.findOne({ devices: authedUserIdStr }, { id: 1 }).lean();
+    const parentUserId = parentUser?.id ? String(parentUser.id) : null;
+    if (parentUserId) {
+      return { userId: parentUserId, resolvedVia: 'deviceUserId' };
+    }
+
+    return { userId: authedUserIdStr, resolvedVia: 'none' };
+  };
+
+  const resolveGroupUserId = async (groupId, authedUserId) => {
+    const account = await resolveAccountUserId(authedUserId);
+    const authedUserIdStr = String(authedUserId ?? '');
+
+    const directMembership = await GroupMember.findOne({
+      groupId,
+      userId: authedUserIdStr,
+    }).lean();
+    if (directMembership) {
+      return { userId: authedUserIdStr, membership: directMembership, resolvedVia: 'direct' };
+    }
+
+    if (account.userId === authedUserIdStr) {
+      return { userId: account.userId, membership: null, resolvedVia: account.resolvedVia };
+    }
+
+    const parentMembership = await GroupMember.findOne({
+      groupId,
+      userId: account.userId,
+    }).lean();
+    return {
+      userId: account.userId,
+      membership: parentMembership ?? null,
+      resolvedVia: account.resolvedVia,
+    };
+  };
+
   const emitEventToGroupMembers = async ({ groupId, eventName, payload, excludeUserIds = [] }) => {
     const groupIdStr = String(groupId ?? '');
     const exclude = new Set(excludeUserIds.map((userId) => String(userId ?? '')).filter(Boolean));
@@ -140,10 +185,11 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr) return { ok: false, error: 'Invalid groupId' };
     if (!authedUserIdStr) return { ok: false, error: 'unauthorized' };
 
-    const [group, membership] = await Promise.all([
+    const [group, resolved] = await Promise.all([
       Group.findOne({ groupId: groupIdStr }).lean(),
-      GroupMember.findOne({ groupId: groupIdStr, userId: authedUserIdStr }).lean(),
+      resolveGroupUserId(groupIdStr, authedUserIdStr),
     ]);
+    const membership = resolved.membership;
 
     if (!group) return { ok: false, error: 'Group not found' };
     if (!membership) return { ok: false, error: 'forbidden' };
@@ -199,10 +245,6 @@ function registerGroupsSocketHandlers(deps) {
       : null;
 
     const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
-    const authedUserIdStr = String(authedUserId);
-    const normalizedMemberIds = [...new Set(memberIds.map((m) => String(m ?? '')).filter(Boolean))].filter((id) => id !== authedUserIdStr);
-    if (normalizedMemberIds.length === 0) return cb?.({ success: false, error: 'At least one member is required' });
-
     const emitToUser = (targetUserId, eventName, payload) => {
       const targetUserIdStr = String(targetUserId ?? '');
       if (targetUserIdStr) io.to(targetUserIdStr).emit(eventName, payload);
@@ -212,6 +254,11 @@ function registerGroupsSocketHandlers(deps) {
     let groupId = null;
 
     try {
+      const account = await resolveAccountUserId(authedUserId);
+      const authedUserIdStr = account.userId;
+      const normalizedMemberIds = [...new Set(memberIds.map((m) => String(m ?? '')).filter(Boolean))].filter((id) => id !== authedUserIdStr);
+      if (normalizedMemberIds.length === 0) return cb?.({ success: false, error: 'At least one member is required' });
+
       for (let attempt = 0; attempt < 5; attempt++) {
         const candidate = nanoid();
         try {
@@ -295,7 +342,8 @@ function registerGroupsSocketHandlers(deps) {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
     try {
-      const authedUserIdStr = String(authedUserId);
+      const account = await resolveAccountUserId(authedUserId);
+      const authedUserIdStr = account.userId;
       const memberships = await GroupMember.find({
         userId: authedUserIdStr,
         status: { $ne: 'removed' },
@@ -354,7 +402,8 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr) return cb?.({ success: false, error: 'Invalid groupId' });
 
     try {
-      const membership = await GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean();
+      const resolved = await resolveGroupUserId(groupIdStr, authedUserId);
+      const membership = resolved.membership;
       if (!membership || membership.status === 'removed') {
         return cb?.({ success: false, error: membership?.status === 'removed' ? 'removed' : 'forbidden' });
       }
@@ -363,7 +412,7 @@ function registerGroupsSocketHandlers(deps) {
       const query = {
         conversationType: 'group',
         groupId: groupIdStr,
-        $or: [{ targetUserId: null }, { targetUserId: String(authedUserId) }],
+        $or: [{ targetUserId: null }, { targetUserId: resolved.userId }],
       };
       const before = Number(beforeSeq);
       if (Number.isFinite(before)) query.seq = { $lt: before };
@@ -388,11 +437,12 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !memberIdStr) return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, callerMembership, sender] = await Promise.all([
+      const [group, resolved] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
-        User.findOne({ id: String(authedUserId) }, { username: 1 }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
       ]);
+      const callerMembership = resolved.membership;
+      const sender = await User.findOne({ id: resolved.userId }, { username: 1 }).lean();
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!callerMembership || callerMembership.status === 'removed' || callerMembership.role !== 'admin') {
         return cb?.({ success: false, error: 'forbidden' });
@@ -435,7 +485,7 @@ function registerGroupsSocketHandlers(deps) {
       io.to(memberIdStr).emit('groupAdded', {
         groupId: groupIdStr,
         name: group.name,
-        addedByUserId: String(authedUserId),
+        addedByUserId: resolved.userId,
         role: 'member',
         at: nowIso,
       });
@@ -443,7 +493,7 @@ function registerGroupsSocketHandlers(deps) {
       io.to(room).emit('groupMemberAdded', {
         groupId: groupIdStr,
         memberId: memberIdStr,
-        addedByUserId: String(authedUserId),
+        addedByUserId: resolved.userId,
         role: 'member',
         at: nowIso,
       });
@@ -464,18 +514,19 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !memberIdStr) return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, callerMembership, targetMembership, remover] = await Promise.all([
+      const [group, resolved, targetMembership] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
         GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean(),
-        User.findOne({ id: String(authedUserId) }, { username: 1 }).lean(),
       ]);
+      const callerMembership = resolved.membership;
+      const remover = await User.findOne({ id: resolved.userId }, { username: 1 }).lean();
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!callerMembership || callerMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
       if (!targetMembership || targetMembership.status === 'removed') return cb?.({ success: false, error: 'not_a_member' });
 
-      const isSelf = String(authedUserId) === memberIdStr;
+      const isSelf = resolved.userId === memberIdStr;
       const canRemove = isSelf || (callerMembership.role === 'admin' && (targetMembership.role !== 'admin' || isSelf));
       if (!canRemove) return cb?.({ success: false, error: 'forbidden' });
 
@@ -496,7 +547,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(memberIdStr).emit('groupRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
           at: nowIso,
@@ -504,7 +555,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
           at: nowIso,
@@ -516,7 +567,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(memberIdStr).emit('groupRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
           at: nowIso,
@@ -524,7 +575,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: memberIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
           at: nowIso,
@@ -568,14 +619,23 @@ function registerGroupsSocketHandlers(deps) {
     const groupIdStr = String(groupId ?? '');
 
     try {
-      const [sender, group, membership] = await Promise.all([
-        User.findOne({ id: authedUserId }),
+      const [group, resolved] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: authedUserId }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
       ]);
+      const sender = await User.findOne({ id: resolved.userId });
+      const membership = resolved.membership;
       if (!sender) return ack({ success: false, error: 'Sender not found' });
       if (!group) return ack({ success: false, error: 'Group not found' });
-      if (!membership || membership.status === 'removed') return ack({ success: false, error: 'Forbidden' });
+      if (!membership || membership.status === 'removed') {
+        return ack({
+          success: false,
+          error: 'Forbidden',
+          details: !membership
+            ? `No group membership for socket user ${authedUserId} (resolved ${resolved.userId} via ${resolved.resolvedVia}) in group ${groupIdStr}`
+            : `Group membership for ${resolved.userId} is ${membership.status}`,
+        });
+      }
       if (!groupIdStr) return ack({ success: false, error: 'Missing required fields' });
 
       const isMlsGroup = group.mlsEnabled === true;
@@ -612,7 +672,7 @@ function registerGroupsSocketHandlers(deps) {
       const message = new Message({
         payload: isMlsGroup ? null : payload,
         nonce,
-        userId: authedUserId,
+        userId: resolved.userId,
         targetUserId: null,
         conversationKey: null,
         username: sender.username,
@@ -680,22 +740,29 @@ function registerGroupsSocketHandlers(deps) {
 
     const groupIdStr = String(groupId ?? '');
     const recipientUserIdStr = String(recipientUserId ?? '');
-    const senderUserIdStr = String(authedUserId);
-
     if (!welcome || typeof welcome !== 'object' || !recipientUserIdStr || !groupIdStr) {
       return cb?.({ success: false, error: 'Missing required fields' });
     }
 
     try {
-      const [group, senderMembership, recipientMembership, sender] = await Promise.all([
+      const [group, resolved, recipientMembership] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: senderUserIdStr }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
         GroupMember.findOne({ groupId: groupIdStr, userId: recipientUserIdStr }).lean(),
-        User.findOne({ id: senderUserIdStr }).lean(),
       ]);
+      const senderMembership = resolved.membership;
+      const sender = await User.findOne({ id: resolved.userId }).lean();
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!senderMembership || senderMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
+      if (!senderMembership || senderMembership.status === 'removed') {
+        return cb?.({
+          success: false,
+          error: 'forbidden',
+          details: !senderMembership
+            ? `No group membership for socket user ${authedUserId} (resolved ${resolved.userId} via ${resolved.resolvedVia}) in group ${groupIdStr}`
+            : `Group membership for ${resolved.userId} is ${senderMembership.status}`,
+        });
+      }
       if (!recipientMembership || recipientMembership.status === 'removed') {
         return cb?.({ success: false, error: 'Recipient is not a member of the group' });
       }
@@ -705,7 +772,7 @@ function registerGroupsSocketHandlers(deps) {
 
       await persistGroupArtifactMessage({
         groupId: groupIdStr,
-        senderUserId: senderUserIdStr,
+        senderUserId: resolved.userId,
         senderUsername: sender.username,
         targetUserId: recipientUserIdStr,
         epoch: welcome.epoch,
@@ -729,10 +796,11 @@ function registerGroupsSocketHandlers(deps) {
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
 
     try {
+      const account = await resolveAccountUserId(authedUserId);
       const stored = await Message.find({
         conversationType: 'group',
         contentType: 'welcome',
-        targetUserId: String(authedUserId),
+        targetUserId: account.userId,
       }).lean();
 
       const welcomes = stored.map((msg) => {
@@ -759,14 +827,23 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !commit || typeof commit !== 'object') return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, senderMembership, sender] = await Promise.all([
+      const [group, resolved] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
-        User.findOne({ id: String(authedUserId) }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
       ]);
+      const senderMembership = resolved.membership;
+      const sender = await User.findOne({ id: resolved.userId }).lean();
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!senderMembership || senderMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
+      if (!senderMembership || senderMembership.status === 'removed') {
+        return cb?.({
+          success: false,
+          error: 'forbidden',
+          details: !senderMembership
+            ? `No group membership for socket user ${authedUserId} (resolved ${resolved.userId} via ${resolved.resolvedVia}) in group ${groupIdStr}`
+            : `Group membership for ${resolved.userId} is ${senderMembership.status}`,
+        });
+      }
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (String(commit.groupId ?? '') !== groupIdStr) return cb?.({ success: false, error: 'Commit groupId mismatch' });
       // Item #17: reject commits that don't advance the epoch by exactly 1.
@@ -776,7 +853,7 @@ function registerGroupsSocketHandlers(deps) {
 
       await persistGroupArtifactMessage({
         groupId: groupIdStr,
-        senderUserId: String(authedUserId),
+        senderUserId: resolved.userId,
         senderUsername: sender.username,
         epoch: commit.epoch,
         senderLeafIndex: commit.senderLeafIndex,
@@ -805,14 +882,16 @@ function registerGroupsSocketHandlers(deps) {
   });
 
   socket.on('publishKeyPackage', async ({ keyPackage, initKeyB64, clientId }, cb) => {
-    const userId = String(socket.user?.id ?? '');
-    if (!userId) return cb?.({ success: false, error: 'unauthorized' });
+    const authedUserId = String(socket.user?.id ?? '');
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
 
     // Item #20: clientId scopes the package to a specific device/session.
     // null means "default client" for backward compatibility.
     const resolvedClientId = typeof clientId === 'string' && clientId.length > 0 ? clientId : null;
 
     try {
+      const account = await resolveAccountUserId(authedUserId);
+      const userId = account.userId;
       if (keyPackage && typeof keyPackage === 'object') {
         const blob = JSON.stringify(keyPackage);
         if (blob.length > 16384) return cb?.({ success: false, error: 'KeyPackage too large' });
@@ -911,14 +990,23 @@ function registerGroupsSocketHandlers(deps) {
     }
 
     try {
-      const [group, membership, sender] = await Promise.all([
+      const [group, resolved] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
-        User.findOne({ id: String(authedUserId) }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
       ]);
+      const membership = resolved.membership;
+      const sender = await User.findOne({ id: resolved.userId }).lean();
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
-      if (!membership || membership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
+      if (!membership || membership.status === 'removed') {
+        return cb?.({
+          success: false,
+          error: 'forbidden',
+          details: !membership
+            ? `No group membership for socket user ${authedUserId} (resolved ${resolved.userId} via ${resolved.resolvedVia}) in group ${groupIdStr}`
+            : `Group membership for ${resolved.userId} is ${membership.status}`,
+        });
+      }
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
       if (String(proposal.groupId ?? '') !== groupIdStr) {
@@ -927,7 +1015,7 @@ function registerGroupsSocketHandlers(deps) {
 
       await persistGroupArtifactMessage({
         groupId: groupIdStr,
-        senderUserId: String(authedUserId),
+        senderUserId: resolved.userId,
         senderUsername: sender.username,
         epoch: proposal.epoch,
         senderLeafIndex: proposal.senderLeafIndex,
@@ -963,15 +1051,23 @@ function registerGroupsSocketHandlers(deps) {
     }
 
     try {
-      const [group, callerMembership] = await Promise.all([
+      const [group, resolved] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
-        GroupMember.findOne({ groupId: groupIdStr, userId: String(authedUserId) }).lean(),
+        resolveGroupUserId(groupIdStr, authedUserId),
       ]);
+      const callerMembership = resolved.membership;
+      const sender = await User.findOne({ id: resolved.userId }).lean();
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!group.mlsEnabled) return cb?.({ success: false, error: 'Not an MLS group' });
       if (!callerMembership || callerMembership.status === 'removed' || callerMembership.role !== 'admin') {
-        return cb?.({ success: false, error: 'forbidden' });
+        return cb?.({
+          success: false,
+          error: 'forbidden',
+          details: !callerMembership
+            ? `No group membership for socket user ${authedUserId} (resolved ${resolved.userId} via ${resolved.resolvedVia}) in group ${groupIdStr}`
+            : `Group membership for ${resolved.userId} is ${callerMembership.status}/${callerMembership.role}`,
+        });
       }
       if (group.epoch + 1 !== epoch) {
         return cb?.({ success: false, error: 'Epoch mismatch — another commit may have won the race' });
@@ -993,7 +1089,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(targetUserIdStr).emit('groupRemoved', {
           groupId: groupIdStr,
           memberId: targetUserIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: sender?.username ?? null,
           groupName: group.name,
           at: nowIso,
@@ -1001,7 +1097,7 @@ function registerGroupsSocketHandlers(deps) {
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
           memberId: targetUserIdStr,
-          removedByUserId: String(authedUserId),
+          removedByUserId: resolved.userId,
           removedByUsername: sender?.username ?? null,
           groupName: group.name,
           at: nowIso,
