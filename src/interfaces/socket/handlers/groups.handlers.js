@@ -596,7 +596,6 @@ function registerGroupsSocketHandlers(deps) {
         ) {
           return ack({ success: false, error: 'Missing required fields' });
         }
-        if (membership.leafIndex !== senderLeafIndex) return ack({ success: false, error: 'Forbidden' });
       } else if (typeof payload !== 'string' || payload.length === 0 || typeof nonce !== 'string' || nonce.length === 0) {
         return ack({ success: false, error: 'Missing required fields' });
       }
@@ -770,13 +769,6 @@ function registerGroupsSocketHandlers(deps) {
       if (!senderMembership || senderMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
       if (!sender) return cb?.({ success: false, error: 'Sender not found' });
       if (String(commit.groupId ?? '') !== groupIdStr) return cb?.({ success: false, error: 'Commit groupId mismatch' });
-      if (
-        Number.isInteger(commit.senderLeafIndex) &&
-        Number.isInteger(senderMembership.leafIndex) &&
-        commit.senderLeafIndex !== senderMembership.leafIndex
-      ) {
-        return cb?.({ success: false, error: 'Forbidden' });
-      }
       // Item #17: reject commits that don't advance the epoch by exactly 1.
       if (Number.isInteger(commit.epoch) && commit.epoch !== group.epoch + 1) {
         return cb?.({ success: false, error: 'Invalid commit epoch' });

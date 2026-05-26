@@ -159,6 +159,84 @@ test('sendGroupCommit: rejects commits with incorrect epoch (item #17)', async (
   }
 });
 
+test('MLS sends accept per-device sender leaf distinct from membership leaf', async () => {
+  await waitForMongo();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+
+  const ts = Date.now();
+  const userA = { id: `MLSPD-A-${ts}`, username: `mlspd_a_${ts}` };
+  const userB = { id: `MLSPD-B-${ts}`, username: `mlspd_b_${ts}` };
+
+  let a = null;
+  let b = null;
+  let groupId = null;
+
+  try {
+    await User.create([userA, userB].map((u) => ({
+      id: u.id,
+      username: u.username,
+      hashedPassword: 'x',
+      publicIdentityKeyX25519: 'x',
+      publicIdentityKeyEd25519: 'x',
+      signedPreKey: 'x',
+      signature: 'x',
+    })));
+
+    [a, b] = await Promise.all([
+      connectAuthed({ port, ...userA }),
+      connectAuthed({ port, ...userB }),
+    ]);
+
+    const createAck = await emitAck(a, 'createGroup', {
+      name: `Per-device MLS ${ts}`,
+      memberIds: [userB.id],
+      mlsEnabled: true,
+      cipherSuite: 'Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256',
+    });
+    assert.equal(createAck?.success, true);
+    groupId = String(createAck.group.groupId);
+
+    const membership = await GroupMember().findOne({ groupId, userId: userA.id }).lean();
+    assert.equal(membership?.leafIndex, 0);
+
+    const appAck = await emitAck(a, 'sendGroupMessage', {
+      groupId,
+      messageType: 'text',
+      contentType: 'application',
+      headerB64: 'header-from-device-leaf-2',
+      ciphertextB64: 'ciphertext-from-device-leaf-2',
+      epoch: 0,
+      senderLeafIndex: 2,
+    });
+    assert.equal(appAck?.success, true, `per-device app send failed: ${appAck?.error}`);
+
+    const commitAck = await emitAck(a, 'sendGroupCommit', {
+      groupId,
+      commit: {
+        groupId,
+        epoch: 1,
+        type: 'update',
+        senderLeafIndex: 2,
+        updatePath: [],
+        confirmationTagB64: 'tag',
+      },
+    });
+    assert.equal(commitAck?.success, true, `per-device commit send failed: ${commitAck?.error}`);
+  } finally {
+    a?.disconnect();
+    b?.disconnect();
+    if (groupId) {
+      await Promise.allSettled([
+        Group().deleteMany({ groupId }),
+        GroupMember().deleteMany({ groupId }),
+      ]);
+    }
+    await User.deleteMany({ id: { $in: [userA.id, userB.id] } });
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // ── Item #9: fetchKeyPackage consumed flag + FIFO pool ───────────────────────
 
 test('publishKeyPackage / fetchKeyPackage: consumed flag and FIFO ordering (item #9)', async () => {
