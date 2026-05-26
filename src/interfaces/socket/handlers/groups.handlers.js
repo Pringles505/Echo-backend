@@ -402,8 +402,15 @@ function registerGroupsSocketHandlers(deps) {
       // cryptographic commit has been distributed and applied. addGroupMember only
       // pre-registers the member with status 'invited' so the server knows to deliver
       // the Welcome; the status becomes 'active' via confirmMlsCommit.
-      const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
+      // Only an *active/invited* row blocks re-adding — a removed-status row is a
+      // tombstone and should be cleaned up so the new row can take its place.
+      const existing = await GroupMember.findOne({
+        groupId: groupIdStr,
+        userId: memberIdStr,
+        status: { $ne: 'removed' },
+      }).lean();
       if (existing) return cb?.({ success: false, error: 'already_member' });
+      await GroupMember.deleteMany({ groupId: groupIdStr, userId: memberIdStr, status: 'removed' });
 
       const existingMembers = await GroupMember.find(
         { groupId: groupIdStr, status: { $ne: 'removed' } },
@@ -479,7 +486,9 @@ function registerGroupsSocketHandlers(deps) {
         // MLS admin-removal: mark the member as removed so subsequent openGroup
         // calls exclude them. The cryptographic remove commit is broadcast
         // separately via sendGroupCommit, which advances the epoch.
-        await GroupMember.updateOne(
+        // updateMany (not updateOne) handles any duplicate rows that may exist
+        // for the same (groupId, userId) from prior partial/legacy state.
+        await GroupMember.updateMany(
           { groupId: groupIdStr, userId: memberIdStr },
           { $set: { status: 'removed' } }
         );

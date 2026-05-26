@@ -399,6 +399,14 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const [bMlsRemovedEvt] = await bMlsRemovedP;
     assert.equal(String(bMlsRemovedEvt.groupId), mlsGroupId);
 
+    // BUG REPRO: after admin-removal in an MLS group, openGroup must NOT return the removed member.
+    const openAfterMlsRemoveAck = await emitAck(a, "openGroup", { groupId: mlsGroupId });
+    assert.equal(openAfterMlsRemoveAck?.success, true);
+    const stillListed = (openAfterMlsRemoveAck?.members ?? []).some(
+      (m) => String(m.userId) === String(userB.id)
+    );
+    assert.equal(stillListed, false, "removed MLS member must not appear in openGroup members");
+
     // Non-admin cannot add members.
     const addByMemberAck = await emitAck(b, "addGroupMember", { groupId, memberId: `X-${ts}` });
     assert.equal(addByMemberAck?.success, false);
