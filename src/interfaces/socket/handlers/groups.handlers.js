@@ -710,6 +710,18 @@ function registerGroupsSocketHandlers(deps) {
       if (!sender) return ack({ success: false, error: 'Sender not found' });
       if (!group) return ack({ success: false, error: 'Group not found' });
       if (!membership || membership.status === 'removed') {
+        const allRows = await GroupMember.find({ groupId: groupIdStr }, { userId: 1, status: 1, role: 1 }).lean();
+        console.warn(
+          '[sendGroupMessage] Forbidden:',
+          JSON.stringify({
+            authedUserId,
+            resolvedUserId: resolved.userId,
+            resolvedVia: resolved.resolvedVia,
+            groupId: groupIdStr,
+            membershipStatus: membership?.status ?? null,
+            allGroupRows: allRows,
+          })
+        );
         return ack({
           success: false,
           error: 'Forbidden',
@@ -1041,21 +1053,39 @@ function registerGroupsSocketHandlers(deps) {
     try {
       const userIdStr = String(targetId ?? '');
       const packages = await KeyPackage.find({ userId: userIdStr, consumed: false })
-        .sort({ createdAt: 1 })
+        .sort({ updatedAt: -1, createdAt: -1 })
         .lean();
       const result = packages.length > 0
         ? packages
-        : await KeyPackage.find({ userId: userIdStr }).sort({ createdAt: 1 }).lean();
+        : await KeyPackage.find({ userId: userIdStr }).sort({ updatedAt: -1, createdAt: -1 }).lean();
       cb?.({
         success: true,
         packages: result.map((kp) => ({
+          id: String(kp._id ?? ''),
           clientId: kp.clientId ?? null,
           initKeyB64: kp.initKeyB64 ?? null,
           keyPackage: kp.keyPackage ?? null,
+          createdAt: kp.createdAt ?? null,
+          updatedAt: kp.updatedAt ?? null,
         })),
       });
     } catch (err) {
       console.error('fetchAllKeyPackages error:', err);
+      cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  socket.on('consumeKeyPackage', async ({ packageId }, cb) => {
+    const callerId = socket.user?.id;
+    if (!callerId) return cb?.({ success: false, error: 'unauthorized' });
+    const packageIdStr = String(packageId ?? '');
+    if (!packageIdStr) return cb?.({ success: false, error: 'Missing required fields' });
+
+    try {
+      await KeyPackage.updateOne({ _id: packageIdStr }, { $set: { consumed: true } });
+      cb?.({ success: true });
+    } catch (err) {
+      console.error('consumeKeyPackage error:', err);
       cb?.({ success: false, error: 'Internal server error' });
     }
   });
