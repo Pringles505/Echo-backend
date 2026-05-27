@@ -433,6 +433,48 @@ test('createGroupsService.addMember rejects non-admin caller', async () => {
   );
 });
 
+test('createGroupsService.addMember replaces removed MLS tombstone on re-add', async () => {
+  const { createGroupsService } = require('../src/modules/groups/application/groupsService');
+  let deleted = null;
+  let created = null;
+  const Group = {
+    findOne: () => ({
+      lean: async () => ({ groupId: 'G1', name: 'MLS Team', mlsEnabled: true }),
+    }),
+  };
+  const GroupMember = {
+    findOne: (query) => ({
+      lean: async () => {
+        if (query.userId === 'ADMIN') {
+          return { groupId: 'G1', userId: 'ADMIN', role: 'admin', leafIndex: 0, status: 'active' };
+        }
+        return null;
+      },
+    }),
+    deleteMany: async (query) => { deleted = query; return {}; },
+    find: (query, projection) => ({
+      lean: async () => {
+        if (projection?.leafIndex) return [{ leafIndex: 0 }];
+        return [{ userId: 'ADMIN' }];
+      },
+    }),
+    create: async (doc) => { created = doc; return doc; },
+  };
+  const svc = createGroupsService({
+    Group,
+    GroupMember,
+    ensureGroupSequence: async () => ({}),
+    notifier: { emitToUser: () => {} },
+  });
+
+  const out = await svc.addMember({ userId: 'ADMIN', groupId: 'G1', memberId: 'BOB' });
+
+  assert.deepEqual(deleted, { groupId: 'G1', userId: 'BOB', status: 'removed' });
+  assert.equal(created.status, 'invited');
+  assert.equal(created.leafIndex, 1);
+  assert.equal(out.member.userId, 'BOB');
+});
+
 test('createGroupsService.removeMember allows self-removal even for non-admin', async () => {
   const { createGroupsService } = require('../src/modules/groups/application/groupsService');
   let deleted = null;

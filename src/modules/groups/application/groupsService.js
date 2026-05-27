@@ -306,8 +306,13 @@ function createGroupsService({
         throw new ForbiddenError('Only admins can add members', 'forbidden');
       }
 
-      const existing = await GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean();
+      const existing = await GroupMember.findOne({
+        groupId: groupIdStr,
+        userId: memberIdStr,
+        status: { $ne: 'removed' },
+      }).lean();
       if (existing) throw new ConflictError('User already a member', 'already_member');
+      await GroupMember.deleteMany({ groupId: groupIdStr, userId: memberIdStr, status: 'removed' });
 
       const existingMembers = await GroupMember.find(
         { groupId: groupIdStr, status: { $ne: 'removed' } },
@@ -319,13 +324,15 @@ function createGroupsService({
       );
       const nextLeafIndex = maxLeafIndex + 1;
 
+      const initialStatus = group.mlsEnabled ? 'invited' : 'active';
+
       await GroupMember.create({
         groupId: groupIdStr,
         userId: memberIdStr,
         role: 'member',
         joinedAt: new Date(),
         leafIndex: nextLeafIndex,
-        status: 'active',
+        status: initialStatus,
       });
 
       const nowIso = new Date().toISOString();
@@ -398,7 +405,14 @@ function createGroupsService({
         || (callerMembership.role === 'admin' && (targetMembership.role !== 'admin' || isSelf));
       if (!canRemove) throw new ForbiddenError('Cannot remove this member', 'forbidden');
 
-      await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
+      if (group.mlsEnabled && !isSelf) {
+        await GroupMember.updateMany(
+          { groupId: groupIdStr, userId: memberIdStr },
+          { $set: { status: 'removed' } }
+        );
+      } else {
+        await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
+      }
 
       const nowIso = new Date().toISOString();
       safeNotify(memberIdStr, 'groupRemoved', {
@@ -411,7 +425,7 @@ function createGroupsService({
       });
 
       const peers = await GroupMember.find(
-        { groupId: groupIdStr },
+        { groupId: groupIdStr, status: { $ne: 'removed' } },
         { userId: 1 },
       ).lean();
       for (const peer of peers) {
