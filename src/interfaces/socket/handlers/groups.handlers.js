@@ -127,6 +127,20 @@ function registerGroupsSocketHandlers(deps) {
     return { userId: authedUserIdStr, resolvedVia: 'none', deviceUserIds: [] };
   };
 
+  // Collect every socket room id that should receive events for an account:
+  // parent user id plus each sibling deviceUserId.
+  const collectAccountDeliveryIds = async (userOrDeviceId) => {
+    const account = await resolveAccountUserId(userOrDeviceId);
+    const ids = new Set();
+    const raw = String(userOrDeviceId ?? '');
+    if (raw) ids.add(raw);
+    if (account.userId) ids.add(String(account.userId));
+    for (const did of account.deviceUserIds ?? []) {
+      if (did) ids.add(String(did));
+    }
+    return { account, ids: Array.from(ids) };
+  };
+
   // Find a (groupId, userId) GroupMember row by trying every identifier the
   // socket might possibly be keyed under: the resolved parent account id, the
   // raw JWT id, and each known sibling deviceUserId. Old groups created before
@@ -176,14 +190,18 @@ function registerGroupsSocketHandlers(deps) {
       { userId: 1 }
     ).lean();
 
-    let deliveredCount = 0;
+    const deliveredRooms = new Set();
     for (const member of members) {
       const memberId = String(member?.userId ?? '');
-      if (!memberId || exclude.has(memberId)) continue;
-      io.to(memberId).emit(eventName, payload);
-      deliveredCount += 1;
+      if (!memberId) continue;
+      const { ids } = await collectAccountDeliveryIds(memberId);
+      for (const id of ids) {
+        if (!id || exclude.has(id) || deliveredRooms.has(id)) continue;
+        io.to(id).emit(eventName, payload);
+        deliveredRooms.add(id);
+      }
     }
-    return deliveredCount;
+    return deliveredRooms.size;
   };
 
   const allocateNextGroupSequence = async (groupId) => {
@@ -308,9 +326,9 @@ function registerGroupsSocketHandlers(deps) {
       : null;
 
     const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 5);
-    const emitToUser = (targetUserId, eventName, payload) => {
-      const targetUserIdStr = String(targetUserId ?? '');
-      if (targetUserIdStr) io.to(targetUserIdStr).emit(eventName, payload);
+    const emitToAccount = async (targetUserId, eventName, payload) => {
+      const { ids } = await collectAccountDeliveryIds(targetUserId);
+      for (const id of ids) io.to(id).emit(eventName, payload);
     };
 
     const nowIso = new Date().toISOString();
@@ -364,10 +382,22 @@ function registerGroupsSocketHandlers(deps) {
           leafIndex: index + 1,
           status: 'active',
         });
-        emitToUser(memberId, 'groupAdded', { groupId, name, addedByUserId: authedUserIdStr, role: 'member', at: nowIso });
+        await emitToAccount(memberId, 'groupAdded', {
+          groupId,
+          name,
+          addedByUserId: authedUserIdStr,
+          role: 'member',
+          at: nowIso,
+        });
       }
 
-      emitToUser(authedUserIdStr, 'groupAdded', { groupId, name, addedByUserId: authedUserIdStr, role: 'admin', at: nowIso });
+      await emitToAccount(authedUserIdStr, 'groupAdded', {
+        groupId,
+        name,
+        addedByUserId: authedUserIdStr,
+        role: 'admin',
+        at: nowIso,
+      });
       cb?.({
         success: true,
         group: { groupId, name, mlsEnabled: wantsMls, epoch: 0, cipherSuite: normalizedCipherSuite },
@@ -564,13 +594,16 @@ function registerGroupsSocketHandlers(deps) {
 
       const nowIso = new Date().toISOString();
       const room = `group:${groupIdStr}`;
-      io.to(memberIdStr).emit('groupAdded', {
-        groupId: groupIdStr,
-        name: group.name,
-        addedByUserId: resolved.userId,
-        role: 'member',
-        at: nowIso,
-      });
+      const { ids: addedDeliveryIds } = await collectAccountDeliveryIds(memberIdStr);
+      for (const deliveryId of addedDeliveryIds) {
+        io.to(deliveryId).emit('groupAdded', {
+          groupId: groupIdStr,
+          name: group.name,
+          addedByUserId: resolved.userId,
+          role: 'member',
+          at: nowIso,
+        });
+      }
 
       io.to(room).emit('groupMemberAdded', {
         groupId: groupIdStr,
@@ -596,19 +629,26 @@ function registerGroupsSocketHandlers(deps) {
     if (!groupIdStr || !memberIdStr) return cb?.({ success: false, error: 'Missing required fields' });
 
     try {
-      const [group, resolved, targetMembership] = await Promise.all([
+      const [group, resolved, targetCandidates] = await Promise.all([
         Group.findOne({ groupId: groupIdStr }).lean(),
         resolveGroupUserId(groupIdStr, authedUserId),
-        GroupMember.findOne({ groupId: groupIdStr, userId: memberIdStr }).lean(),
+        collectAccountDeliveryIds(memberIdStr),
       ]);
       const callerMembership = resolved.membership;
       const remover = await User.findOne({ id: resolved.userId }, { username: 1 }).lean();
+      const targetMemberships = await GroupMember.find({
+        groupId: groupIdStr,
+        userId: { $in: targetCandidates.ids },
+      }).lean();
+      const targetMembership =
+        targetMemberships.find((m) => m.status !== 'removed') ?? targetMemberships[0] ?? null;
+      const canonicalMemberId = String(targetCandidates.account.userId || memberIdStr);
 
       if (!group) return cb?.({ success: false, error: 'Group not found' });
       if (!callerMembership || callerMembership.status === 'removed') return cb?.({ success: false, error: 'forbidden' });
       if (!targetMembership || targetMembership.status === 'removed') return cb?.({ success: false, error: 'not_a_member' });
 
-      const isSelf = resolved.userId === memberIdStr;
+      const isSelf = resolved.userId === canonicalMemberId;
       const canRemove = isSelf || (callerMembership.role === 'admin' && (targetMembership.role !== 'admin' || isSelf));
       if (!canRemove) return cb?.({ success: false, error: 'forbidden' });
 
@@ -622,21 +662,23 @@ function registerGroupsSocketHandlers(deps) {
         // updateMany (not updateOne) handles any duplicate rows that may exist
         // for the same (groupId, userId) from prior partial/legacy state.
         await GroupMember.updateMany(
-          { groupId: groupIdStr, userId: memberIdStr },
+          { groupId: groupIdStr, userId: { $in: targetCandidates.ids } },
           { $set: { status: 'removed' } }
         );
-        io.in(memberIdStr).socketsLeave(room);
-        io.to(memberIdStr).emit('groupRemoved', {
-          groupId: groupIdStr,
-          memberId: memberIdStr,
-          removedByUserId: resolved.userId,
-          removedByUsername: remover?.username ?? null,
-          groupName: group.name,
-          at: nowIso,
-        });
+        for (const deliveryId of targetCandidates.ids) {
+          io.in(deliveryId).socketsLeave(room);
+          io.to(deliveryId).emit('groupRemoved', {
+            groupId: groupIdStr,
+            memberId: canonicalMemberId,
+            removedByUserId: resolved.userId,
+            removedByUsername: remover?.username ?? null,
+            groupName: group.name,
+            at: nowIso,
+          });
+        }
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
-          memberId: memberIdStr,
+          memberId: canonicalMemberId,
           removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
@@ -644,19 +686,21 @@ function registerGroupsSocketHandlers(deps) {
         });
       } else {
         // Non-MLS groups or self-leave: complete immediately.
-        await GroupMember.deleteOne({ groupId: groupIdStr, userId: memberIdStr });
-        io.in(memberIdStr).socketsLeave(room);
-        io.to(memberIdStr).emit('groupRemoved', {
-          groupId: groupIdStr,
-          memberId: memberIdStr,
-          removedByUserId: resolved.userId,
-          removedByUsername: remover?.username ?? null,
-          groupName: group.name,
-          at: nowIso,
-        });
+        await GroupMember.deleteMany({ groupId: groupIdStr, userId: { $in: targetCandidates.ids } });
+        for (const deliveryId of targetCandidates.ids) {
+          io.in(deliveryId).socketsLeave(room);
+          io.to(deliveryId).emit('groupRemoved', {
+            groupId: groupIdStr,
+            memberId: canonicalMemberId,
+            removedByUserId: resolved.userId,
+            removedByUsername: remover?.username ?? null,
+            groupName: group.name,
+            at: nowIso,
+          });
+        }
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
-          memberId: memberIdStr,
+          memberId: canonicalMemberId,
           removedByUserId: resolved.userId,
           removedByUsername: remover?.username ?? null,
           groupName: group.name,
@@ -750,6 +794,14 @@ function registerGroupsSocketHandlers(deps) {
         ) {
           return ack({ success: false, error: 'Missing required fields' });
         }
+        const groupEpoch = Number.isInteger(group.epoch) ? group.epoch : 0;
+        if (epoch !== groupEpoch) {
+          return ack({
+            success: false,
+            error: 'Invalid message epoch',
+            details: `Group epoch is ${groupEpoch}, message epoch is ${epoch}`,
+          });
+        }
       } else if (typeof payload !== 'string' || payload.length === 0 || typeof nonce !== 'string' || nonce.length === 0) {
         return ack({ success: false, error: 'Missing required fields' });
       }
@@ -812,10 +864,16 @@ function registerGroupsSocketHandlers(deps) {
         { groupId: groupIdStr, status: { $ne: 'removed' } },
         { userId: 1 }
       ).lean();
+      const notifiedRooms = new Set([room]);
       for (const m of members) {
         const memberId = String(m?.userId ?? '');
         if (!memberId) continue;
-        io.to(memberId).except(room).emit('newGroupMessage', messageWithProfile);
+        const { ids } = await collectAccountDeliveryIds(memberId);
+        for (const id of ids) {
+          if (!id || notifiedRooms.has(id)) continue;
+          io.to(id).except(room).emit('newGroupMessage', messageWithProfile);
+          notifiedRooms.add(id);
+        }
       }
 
       ack({ success: true, seq });
@@ -875,9 +933,12 @@ function registerGroupsSocketHandlers(deps) {
         artifact: welcome,
       });
 
-      // Broadcast to the user's entire socket room so all their devices receive it.
-      // Each device filters by welcome.recipientClientId to decide whether to process.
-      io.to(recipientUserIdStr).emit('groupWelcome', { groupId: groupIdStr, welcome });
+      // Broadcast to every device room for the recipient account. Each device
+      // filters by welcome.recipientClientId to decide whether to process.
+      const { ids: welcomeDeliveryIds } = await collectAccountDeliveryIds(recipientUserIdStr);
+      for (const deliveryId of welcomeDeliveryIds) {
+        io.to(deliveryId).emit('groupWelcome', { groupId: groupIdStr, welcome });
+      }
       return cb?.({ success: true, delivered: true });
     } catch (err) {
       console.error('Error sending group welcome:', err);
@@ -890,21 +951,32 @@ function registerGroupsSocketHandlers(deps) {
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
 
     try {
-      const account = await resolveAccountUserId(authedUserId);
+      const { ids: welcomeTargetIds } = await collectAccountDeliveryIds(authedUserId);
       const stored = await Message.find({
         conversationType: 'group',
         contentType: 'welcome',
-        targetUserId: account.userId,
+        targetUserId: { $in: welcomeTargetIds },
       }).lean();
 
-      const welcomes = stored.map((msg) => {
-        try {
-          const welcome = JSON.parse(msg.payload);
-          return { groupId: msg.groupId, welcome };
-        } catch {
-          return null;
-        }
-      }).filter(Boolean);
+      const thisDeviceClientId = socket.user?.deviceId ? String(socket.user.deviceId) : null;
+      const welcomes = stored
+        .map((msg) => {
+          try {
+            const welcome = JSON.parse(msg.payload);
+            const targetClientId = welcome?.recipientClientId ?? null;
+            if (
+              targetClientId !== null &&
+              thisDeviceClientId &&
+              targetClientId !== thisDeviceClientId
+            ) {
+              return null;
+            }
+            return { groupId: msg.groupId, welcome };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
 
       cb?.({ success: true, welcomes });
     } catch (err) {
@@ -1186,29 +1258,35 @@ function registerGroupsSocketHandlers(deps) {
       }
 
       if (type === 'add' && targetUserIdStr) {
-        await GroupMember.updateOne(
-          { groupId: groupIdStr, userId: targetUserIdStr },
+        const { ids: addTargetIds } = await collectAccountDeliveryIds(targetUserIdStr);
+        await GroupMember.updateMany(
+          { groupId: groupIdStr, userId: { $in: addTargetIds } },
           { $set: { status: 'active' } }
         );
       } else if (type === 'remove' && targetUserIdStr) {
-        await GroupMember.updateOne(
-          { groupId: groupIdStr, userId: targetUserIdStr },
+        const { account: removedAccount, ids: removeTargetIds } =
+          await collectAccountDeliveryIds(targetUserIdStr);
+        const canonicalMemberId = String(removedAccount.userId || targetUserIdStr);
+        await GroupMember.updateMany(
+          { groupId: groupIdStr, userId: { $in: removeTargetIds } },
           { $set: { status: 'removed' } }
         );
         const room = `group:${groupIdStr}`;
         const nowIso = new Date().toISOString();
-        io.in(targetUserIdStr).socketsLeave(room);
-        io.to(targetUserIdStr).emit('groupRemoved', {
-          groupId: groupIdStr,
-          memberId: targetUserIdStr,
-          removedByUserId: resolved.userId,
-          removedByUsername: sender?.username ?? null,
-          groupName: group.name,
-          at: nowIso,
-        });
+        for (const deliveryId of removeTargetIds) {
+          io.in(deliveryId).socketsLeave(room);
+          io.to(deliveryId).emit('groupRemoved', {
+            groupId: groupIdStr,
+            memberId: canonicalMemberId,
+            removedByUserId: resolved.userId,
+            removedByUsername: sender?.username ?? null,
+            groupName: group.name,
+            at: nowIso,
+          });
+        }
         io.to(room).emit('groupMemberRemoved', {
           groupId: groupIdStr,
-          memberId: targetUserIdStr,
+          memberId: canonicalMemberId,
           removedByUserId: resolved.userId,
           removedByUsername: sender?.username ?? null,
           groupName: group.name,

@@ -34,14 +34,33 @@ function registerPresenceSocketHandlers({ socket, io, userSocketMap, Message, Us
     socket.emit('onlineUsersList', { onlineUsers: Object.keys(userSocketMap) });
 
     const authedId = String(socket.user.id);
-    Message.find({
-      conversationType: 'group',
-      contentType: 'welcome',
-      targetUserId: authedId,
-    }).lean().then((stored) => {
+    const welcomeTargetIds = new Set([authedId]);
+    if (socket.user.deviceUserId) welcomeTargetIds.add(String(socket.user.deviceUserId));
+    User.findOne({ id: authedId }, { devices: 1 })
+      .lean()
+      .then((parent) => {
+        for (const deviceUserId of parent?.devices ?? []) {
+          if (deviceUserId) welcomeTargetIds.add(String(deviceUserId));
+        }
+        return Message.find({
+          conversationType: 'group',
+          contentType: 'welcome',
+          targetUserId: { $in: Array.from(welcomeTargetIds) },
+        }).lean();
+      })
+      .then((stored) => {
+      const thisDeviceClientId = socket.user?.deviceId ? String(socket.user.deviceId) : null;
       for (const msg of stored) {
         try {
           const welcome = JSON.parse(msg.payload);
+          const targetClientId = welcome?.recipientClientId ?? null;
+          if (
+            targetClientId !== null &&
+            thisDeviceClientId &&
+            targetClientId !== thisDeviceClientId
+          ) {
+            continue;
+          }
           socket.emit('groupWelcome', { groupId: msg.groupId, welcome });
         } catch { }
       }
