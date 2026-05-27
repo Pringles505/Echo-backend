@@ -255,8 +255,9 @@ const PAIRING_MAX_ATTEMPTS = parseIntEnv('PAIRING_MAX_ATTEMPTS', 5);
 // Device Sync Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SYNC_SESSION_TTL_MS = parseIntEnv('SYNC_SESSION_TTL_MS', 90_000);
-const SYNC_SESSION_MAX_TTL_MS = parseIntEnv('SYNC_SESSION_MAX_TTL_MS', 120_000);
+// Increase default QR sync session lifetime for easier pairing during dev
+const SYNC_SESSION_TTL_MS = parseIntEnv('SYNC_SESSION_TTL_MS', 180_000);
+const SYNC_SESSION_MAX_TTL_MS = parseIntEnv('SYNC_SESSION_MAX_TTL_MS', 300_000);
 const SYNC_CHUNK_MAX_SIZE = parseIntEnv('SYNC_CHUNK_MAX_SIZE', 256 * 1024);
 const SYNC_CHUNK_MAX_COUNT = parseIntEnv('SYNC_CHUNK_MAX_COUNT', 256);
 const SYNC_MAX_TOTAL_BYTES = parseIntEnv('SYNC_MAX_TOTAL_BYTES', 32 * 1024 * 1024);
