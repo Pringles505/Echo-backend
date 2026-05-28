@@ -946,6 +946,36 @@ function registerGroupsSocketHandlers(deps) {
     }
   });
 
+  socket.on('requestSiblingGroupMlsBootstrap', async ({ groupId }, cb) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
+
+    const groupIdStr = String(groupId ?? '');
+    if (!groupIdStr) return cb?.({ success: false, error: 'Missing groupId' });
+
+    try {
+      const requesterDeviceId = socket.user?.deviceId ? String(socket.user.deviceId) : null;
+      const { ids } = await collectAccountDeliveryIds(authedUserId);
+      const requesterRooms = new Set([String(authedUserId)]);
+      if (requesterDeviceId) requesterRooms.add(requesterDeviceId);
+
+      let notified = 0;
+      for (const id of ids) {
+        if (!id || requesterRooms.has(id)) continue;
+        io.to(id).emit('siblingGroupMlsBootstrapRequest', {
+          groupId: groupIdStr,
+          requesterDeviceId,
+        });
+        notified += 1;
+      }
+
+      return cb?.({ success: true, notified });
+    } catch (err) {
+      console.error('Error requesting sibling MLS bootstrap:', err);
+      return cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
   socket.on('fetchPendingWelcomes', async (_, cb) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
