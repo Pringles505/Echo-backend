@@ -362,6 +362,8 @@ function registerGroupsSocketHandlers(deps) {
     try {
       const account = await resolveAccountUserId(authedUserId);
       const authedUserIdStr = account.userId;
+      const creatorProfile = await User.findOne({ id: authedUserIdStr }, { username: 1 }).lean();
+      const creatorUsername = creatorProfile?.username ?? null;
       const normalizedMemberIds = [...new Set(memberIds.map((m) => String(m ?? '')).filter(Boolean))].filter((id) => id !== authedUserIdStr);
       if (normalizedMemberIds.length === 0) return cb?.({ success: false, error: 'At least one member is required' });
 
@@ -411,6 +413,7 @@ function registerGroupsSocketHandlers(deps) {
           groupId,
           name,
           addedByUserId: authedUserIdStr,
+          addedByUsername: creatorUsername,
           role: 'member',
           at: nowIso,
         });
@@ -420,6 +423,7 @@ function registerGroupsSocketHandlers(deps) {
         groupId,
         name,
         addedByUserId: authedUserIdStr,
+        addedByUsername: creatorUsername,
         role: 'admin',
         at: nowIso,
       });
@@ -632,6 +636,7 @@ function registerGroupsSocketHandlers(deps) {
           groupId: groupIdStr,
           name: group.name,
           addedByUserId: resolved.userId,
+          addedByUsername: sender?.username ?? null,
           role: 'member',
           at: nowIso,
         });
@@ -641,6 +646,7 @@ function registerGroupsSocketHandlers(deps) {
         groupId: groupIdStr,
         memberId: canonicalMemberId,
         addedByUserId: resolved.userId,
+        addedByUsername: sender?.username ?? null,
         role: 'member',
         at: nowIso,
       });
