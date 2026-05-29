@@ -190,10 +190,37 @@ function createUsersRouter(deps = {}) {
     async (req, res, next) => {
       try {
         const userId = req.user?.id;
-        const user = await userProfileService.updateProfile({
-          userId,
-          changes: req.body || {},
-        });
+        // Normalize frontend aliases -> service schema
+        const body = req.body || {};
+        const changes = {};
+        if (typeof body.username === 'string' && body.username) changes.username = body.username;
+        if (typeof body.display_name === 'string' && body.display_name)
+          changes.username = body.display_name;
+        if (typeof body.aboutme === 'string') changes.aboutme = body.aboutme;
+        if (typeof body.bio === 'string') changes.aboutme = body.bio;
+        if (typeof body.profilePicture === 'string') changes.profilePicture = body.profilePicture;
+        if (typeof body.avatar_url === 'string') changes.profilePicture = body.avatar_url;
+        if (typeof body.oldPassword === 'string') changes.oldPassword = body.oldPassword;
+        if (typeof body.newPassword === 'string') changes.newPassword = body.newPassword;
+
+        const user = await userProfileService.updateProfile({ userId, changes });
+        // Broadcast profile updates so open UIs and notifications refresh avatars
+        try {
+          const payload = {
+            userId: user.id,
+            username: user.username,
+            profilePicture: user.profilePicture || '',
+          };
+          if (notifier && typeof notifier.listOnlineUserIds === 'function' && typeof notifier.emitToUser === 'function') {
+            const onlineIds = notifier.listOnlineUserIds();
+            for (const uid of Array.isArray(onlineIds) ? onlineIds : []) {
+              notifier.emitToUser(uid, 'userProfileUpdated', payload);
+            }
+          }
+        } catch (broadcastErr) {
+          // Non-fatal: HTTP response should still succeed
+          console.warn('[http] Failed to broadcast userProfileUpdated:', broadcastErr);
+        }
         return res.json({ success: true, user });
       } catch (err) {
         return handleServiceError(res, next, err);

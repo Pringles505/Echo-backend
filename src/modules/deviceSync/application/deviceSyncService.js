@@ -99,6 +99,31 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
     return session;
   }
 
+  // Read-only poll path: validate the target token but do not 409 on terminal
+  // statuses. Desktop/mobile pollers need to observe completed/expired/cancelled
+  // and stop gracefully instead of spamming Conflict responses in the network tab.
+  async function resolveTargetSessionForPoll(sessionId, targetAccessToken) {
+    if (!targetAccessToken) {
+      throw new ForbiddenError('Missing target session token', 'missing_target_sync_token');
+    }
+    const session = await loadSessionById(sessionId);
+    if (!session) {
+      throw new NotFoundError('Sync session not found', 'sync_session_not_found');
+    }
+    if (session.targetAccessTokenHash !== sha256(targetAccessToken)) {
+      throw new ForbiddenError('Invalid target session token', 'invalid_target_sync_token');
+    }
+    if (
+      session.expiresAt &&
+      new Date(session.expiresAt).getTime() <= Date.now() &&
+      session.status !== 'completed' &&
+      session.status !== 'cancelled'
+    ) {
+      session.status = 'expired';
+    }
+    return session;
+  }
+
   return {
     limits: { ttlMs, maxChunkSize, maxChunkCount, maxTotalBytes },
 
@@ -152,7 +177,7 @@ function createDeviceSyncService({ DeviceSyncSession, User, Device = null, authS
     },
 
     async getDhSession({ sessionId, targetAccessToken }) {
-      const session = await requireTargetSession(sessionId, targetAccessToken);
+      const session = await resolveTargetSessionForPoll(sessionId, targetAccessToken);
       return publicView(session);
     },
 

@@ -166,12 +166,14 @@ function registerGroupsSocketHandlers(deps) {
       userId: { $in: Array.from(candidateIds) },
     }).lean();
 
-    // Prefer the parent-keyed row when present (the new canonical layout); fall
-    // back to any active row keyed by a sibling/legacy identifier; treat removed
-    // rows as last-resort so the caller can still report the removal reason.
-    const byParent = memberships.find((m) => String(m.userId) === String(account.userId));
+    // Prefer an active parent-keyed row (the new canonical layout), then any
+    // active sibling/legacy row. A removed parent tombstone must not shadow a
+    // fresh active re-add row keyed by another account identifier.
+    const parentRows = memberships.filter((m) => String(m.userId) === String(account.userId));
+    const activeParent = parentRows.find((m) => m.status !== 'removed');
     const activeFallback = memberships.find((m) => m.status !== 'removed');
-    const chosen = byParent ?? activeFallback ?? memberships[0] ?? null;
+    const removedParent = parentRows.find((m) => m.status === 'removed') ?? parentRows[0] ?? null;
+    const chosen = activeParent ?? activeFallback ?? removedParent ?? memberships[0] ?? null;
 
     return {
       userId: account.userId || authedUserIdStr,
@@ -202,6 +204,29 @@ function registerGroupsSocketHandlers(deps) {
       }
     }
     return deliveredRooms.size;
+  };
+
+  const filterReachableKeyPackages = async (userId, packages) => {
+    if (!Device || !Array.isArray(packages) || packages.length === 0) return packages;
+
+    const activeDevices = await Device.find(
+      { parentUserId: String(userId ?? ''), isRevoked: false },
+      { deviceId: 1 }
+    ).lean();
+    const activeClientIds = new Set(
+      activeDevices
+        .map((device) => String(device?.deviceId ?? ''))
+        .filter((deviceId) => deviceId.length > 0)
+    );
+
+    // Some tests and legacy accounts have KeyPackages before Device rows existed.
+    // In that case keep the historical behavior instead of hiding all packages.
+    if (activeClientIds.size === 0) return packages;
+
+    return packages.filter((kp) => {
+      const clientId = kp?.clientId == null ? null : String(kp.clientId);
+      return clientId === null || activeClientIds.has(clientId);
+    });
   };
 
   const allocateNextGroupSequence = async (groupId) => {
@@ -560,6 +585,10 @@ function registerGroupsSocketHandlers(deps) {
         return cb?.({ success: false, error: 'forbidden' });
       }
 
+      const addTarget = await collectAccountDeliveryIds(memberIdStr);
+      const canonicalMemberId = String(addTarget.account.userId || memberIdStr);
+      const addTargetIds = addTarget.ids.length > 0 ? addTarget.ids : [memberIdStr];
+
       // For MLS groups, membership DB changes are driven by confirmMlsCommit after the
       // cryptographic commit has been distributed and applied. addGroupMember only
       // pre-registers the member with status 'invited' so the server knows to deliver
@@ -568,11 +597,15 @@ function registerGroupsSocketHandlers(deps) {
       // tombstone and should be cleaned up so the new row can take its place.
       const existing = await GroupMember.findOne({
         groupId: groupIdStr,
-        userId: memberIdStr,
+        userId: { $in: addTargetIds },
         status: { $ne: 'removed' },
       }).lean();
       if (existing) return cb?.({ success: false, error: 'already_member' });
-      await GroupMember.deleteMany({ groupId: groupIdStr, userId: memberIdStr, status: 'removed' });
+      await GroupMember.deleteMany({
+        groupId: groupIdStr,
+        userId: { $in: addTargetIds },
+        status: 'removed',
+      });
 
       const existingMembers = await GroupMember.find(
         { groupId: groupIdStr, status: { $ne: 'removed' } },
@@ -585,7 +618,7 @@ function registerGroupsSocketHandlers(deps) {
 
       await GroupMember.create({
         groupId: groupIdStr,
-        userId: memberIdStr,
+        userId: canonicalMemberId,
         role: 'member',
         joinedAt: new Date(),
         leafIndex: nextLeafIndex,
@@ -594,8 +627,7 @@ function registerGroupsSocketHandlers(deps) {
 
       const nowIso = new Date().toISOString();
       const room = `group:${groupIdStr}`;
-      const { ids: addedDeliveryIds } = await collectAccountDeliveryIds(memberIdStr);
-      for (const deliveryId of addedDeliveryIds) {
+      for (const deliveryId of addTargetIds) {
         io.to(deliveryId).emit('groupAdded', {
           groupId: groupIdStr,
           name: group.name,
@@ -607,7 +639,7 @@ function registerGroupsSocketHandlers(deps) {
 
       io.to(room).emit('groupMemberAdded', {
         groupId: groupIdStr,
-        memberId: memberIdStr,
+        memberId: canonicalMemberId,
         addedByUserId: resolved.userId,
         role: 'member',
         at: nowIso,
@@ -1122,11 +1154,15 @@ function registerGroupsSocketHandlers(deps) {
       const userIdStr = String(targetId ?? '');
       // Item #9: prefer a non-consumed package; fall back to any package for backward compat.
       // Sort by createdAt ascending so oldest packages are consumed first (FIFO pool).
-      let kp = await KeyPackage.findOne({ userId: userIdStr, consumed: false })
+      let candidates = await KeyPackage.find({ userId: userIdStr, consumed: false })
         .sort({ createdAt: 1 })
         .lean();
+      let reachable = await filterReachableKeyPackages(userIdStr, candidates);
+      let kp = reachable[0] ?? null;
       if (!kp) {
-        kp = await KeyPackage.findOne({ userId: userIdStr }).sort({ createdAt: 1 }).lean();
+        candidates = await KeyPackage.find({ userId: userIdStr }).sort({ createdAt: 1 }).lean();
+        reachable = await filterReachableKeyPackages(userIdStr, candidates);
+        kp = reachable[0] ?? null;
       }
       if (!kp) return cb?.({ success: false, error: 'KeyPackage not found' });
 
@@ -1157,9 +1193,10 @@ function registerGroupsSocketHandlers(deps) {
       const packages = await KeyPackage.find({ userId: userIdStr, consumed: false })
         .sort({ updatedAt: -1, createdAt: -1 })
         .lean();
-      const result = packages.length > 0
+      let result = packages.length > 0
         ? packages
         : await KeyPackage.find({ userId: userIdStr }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+      result = await filterReachableKeyPackages(userIdStr, result);
       cb?.({
         success: true,
         packages: result.map((kp) => ({

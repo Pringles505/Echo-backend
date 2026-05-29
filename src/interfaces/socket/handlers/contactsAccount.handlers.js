@@ -62,6 +62,8 @@
  * @param {*} deps.bcrypt - Bcryptjs module for password operations
  * @param {function} deps.saveProfilePicture - Function to save profile picture
  */
+const { queryUsersByUsername } = require('../../../modules/users/application/userProfileService');
+
 function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User, Message, bcrypt, saveProfilePicture }) {
   /**
    * 'searchUser' event - Search for a user by username.
@@ -70,10 +72,14 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
    * @param {SearchUserAckResponse} callback - Ack callback
    */
   socket.on('searchUser', async (data, callback) => {
-    const username = data.searchTerm;
+    const searchTerm = typeof data?.searchTerm === 'string' ? data.searchTerm.trim() : '';
+    if (!searchTerm) {
+      return callback({ success: false, error: 'searchTerm is required' });
+    }
     try {
-      const user = await User.findOne({ username });
-      if (!user) return callback({ success: false, error: 'User not found' });
+      const docs = await queryUsersByUsername(User, { searchTerm, limit: 1 });
+      if (docs.length === 0) return callback({ success: false, error: 'User not found' });
+      const user = docs[0];
       callback({ success: true, user: { id: user.id, username: user.username } });
     } catch (error) {
       console.error('Error searching user:', error);
@@ -91,8 +97,16 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
   socket.on('updateUserInfo', async (data, callback) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return callback?.({ success: false, error: 'unauthorized' });
-
-    const { username, aboutme, profilePicture, oldPassword, newPassword } = data;
+    // Accept both legacy and aliased fields from various clients
+    const username = typeof data?.username === 'string' && data.username
+      ? data.username
+      : (typeof data?.display_name === 'string' && data.display_name) || undefined;
+    const aboutme = typeof data?.aboutme === 'string' ? data.aboutme
+      : (typeof data?.bio === 'string' ? data.bio : undefined);
+    const profilePicture = typeof data?.profilePicture === 'string' ? data.profilePicture
+      : (typeof data?.avatar_url === 'string' ? data.avatar_url : undefined);
+    const oldPassword = data?.oldPassword;
+    const newPassword = data?.newPassword;
     try {
       const user = await User.findOne({ id: authedUserId });
       if (!user) return callback?.({ success: false, error: 'User not found' });
@@ -112,6 +126,23 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
       }
 
       await user.save();
+
+      // Broadcast updated profile to all relevant listeners so open UIs refresh
+      // and notifications use the latest avatar. Emit to:
+      // - this user's room (all devices)
+      // - everyone else online (clients will ignore if not relevant)
+      try {
+        const payload = {
+          userId: user.id,
+          username: user.username,
+          profilePicture: user.profilePicture || '',
+        };
+        io.to(user.id).emit('userProfileUpdated', payload);
+        socket.broadcast.emit('userProfileUpdated', payload);
+      } catch (broadcastErr) {
+        console.warn('[socket] Failed to broadcast userProfileUpdated:', broadcastErr);
+      }
+
       callback?.({
         success: true,
         user: {

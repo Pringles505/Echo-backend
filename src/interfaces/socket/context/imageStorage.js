@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs/promises');
 const { BadRequestError } = require('../../../shared/errors');
+const { UPLOADS_DIR } = require('../../../shared/constants');
 
 const DATA_URL_RE = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/;
 
@@ -64,7 +65,10 @@ async function persistImageDataUrl({
   }
 
   const ext = EXT_BY_MIME[mimeType];
-  const uploadDir = path.join(process.cwd(), 'uploads');
+  // Persist under the SAME physical directory served by server.js:
+  // server.js -> app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+  // This file lives at src/interfaces/socket/context — go up 4 levels to repo root.
+  const uploadDir = path.join(__dirname, '../../../../', UPLOADS_DIR || 'uploads');
   await fs.mkdir(uploadDir, { recursive: true });
   const filename = `${filenamePrefix}-${userId}-${Date.now()}.${ext}`;
   const filePath = path.join(uploadDir, filename);

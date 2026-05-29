@@ -90,7 +90,10 @@ const CORS_ALLOWED_ORIGINS = parseListEnv('CORS_ALLOWED_ORIGINS');
  *      and Tauri dev windows just work.
  */
 const PRODUCTION_DEFAULT_ORIGINS = [
-  'https://chat-tuah-frontend.vercel.app',
+  // NOTE: this is a Vercel per-deployment URL (contains a build hash) and will
+  // change on every frontend deploy. Replace with the stable production alias
+  // (e.g. https://echo-frontend.vercel.app) once confirmed in Vercel → Domains.
+  'https://echo-frontend-hia4mbdxj-miguel-mascaros-projects.vercel.app',
   'tauri://localhost',
   'http://tauri.localhost',
   'https://tauri.localhost',

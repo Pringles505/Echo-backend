@@ -18,6 +18,49 @@ const {
   ConflictError,
 } = require('../../../shared/errors');
 
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Tiered username filters: exact → prefix → contains (min 2 chars). */
+function usernameSearchFilters(searchTerm, excludeUserId = null) {
+  const term = String(searchTerm ?? '').trim();
+  if (!term) return [];
+  const escaped = escapeRegex(term);
+  const exclude = excludeUserId ? { id: { $ne: excludeUserId } } : {};
+  const filters = [
+    { ...exclude, username: { $regex: `^${escaped}$`, $options: 'i' } },
+    { ...exclude, username: { $regex: `^${escaped}`, $options: 'i' } },
+  ];
+  if (term.length >= 2) {
+    filters.push({ ...exclude, username: { $regex: escaped, $options: 'i' } });
+  }
+  return filters;
+}
+
+function toPublicUserSummary(userDoc) {
+  return {
+    id: userDoc.id,
+    username: userDoc.username,
+    aboutme: userDoc.aboutme || '',
+    profilePicture: userDoc.profilePicture || '',
+    banner: userDoc.banner || '',
+  };
+}
+
+/**
+ * Shared username lookup for HTTP and socket search endpoints.
+ * @param {import('mongoose').Model} User
+ */
+async function queryUsersByUsername(User, { searchTerm, limit = 20, excludeUserId = null } = {}) {
+  const cap = Math.max(1, Math.min(50, Number(limit) || 20));
+  for (const filter of usernameSearchFilters(searchTerm, excludeUserId)) {
+    const docs = await User.find(filter).limit(cap).lean();
+    if (docs.length > 0) return docs;
+  }
+  return [];
+}
+
 /**
  * @typedef {object} UpdateProfileChanges
  * @property {string} [username]
@@ -64,12 +107,12 @@ function createUserProfileService({
      * @returns {Promise<PublicUser>}
      */
     async searchUser({ searchTerm }) {
-      if (typeof searchTerm !== 'string' || searchTerm.length === 0) {
+      if (typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
         throw new BadRequestError('searchTerm is required', 'validation_error');
       }
-      const user = await User.findOne({ username: searchTerm });
-      if (!user) throw new NotFoundError('User not found', 'user_not_found');
-      return { id: user.id, username: user.username };
+      const docs = await queryUsersByUsername(User, { searchTerm, limit: 1 });
+      if (docs.length === 0) throw new NotFoundError('User not found', 'user_not_found');
+      return { id: docs[0].id, username: docs[0].username };
     },
 
     /**
@@ -85,23 +128,8 @@ function createUserProfileService({
       if (typeof searchTerm !== 'string' || searchTerm.trim().length === 0) {
         throw new BadRequestError('searchTerm is required', 'validation_error');
       }
-      const term = searchTerm.trim();
-      // Escape regex metacharacters so usernames containing `.` or `+` don't
-      // turn the prefix into an unintended pattern.
-      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const filter = { username: { $regex: `^${escaped}`, $options: 'i' } };
-      if (excludeUserId) filter.id = { $ne: excludeUserId };
-      const docs = await User.find(filter)
-        .limit(Math.max(1, Math.min(50, Number(limit) || 20)))
-        .lean();
-      const users = docs.map((u) => ({
-        id: u.id,
-        username: u.username,
-        aboutme: u.aboutme || '',
-        profilePicture: u.profilePicture || '',
-        banner: u.banner || '',
-      }));
-      return { users };
+      const docs = await queryUsersByUsername(User, { searchTerm, limit, excludeUserId });
+      return { users: docs.map(toPublicUserSummary) };
     },
 
 
@@ -274,4 +302,8 @@ function createUserProfileService({
   };
 }
 
-module.exports = { createUserProfileService };
+module.exports = {
+  createUserProfileService,
+  queryUsersByUsername,
+  usernameSearchFilters,
+};

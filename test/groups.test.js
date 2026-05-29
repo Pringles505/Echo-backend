@@ -35,6 +35,7 @@ const { server, mongoose, Message, User } = require("../server");
 const Group = () => mongoose.model("Group");
 const GroupMember = () => mongoose.model("GroupMember");
 const GroupSequence = () => mongoose.model("GroupSequence");
+const Device = () => mongoose.model("Device");
 
 async function waitForMongo() {
   if (mongoose.connection.readyState === 1) return;
@@ -82,6 +83,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
   let c = null;
   let d = null;
   let e = null;
+  let bDevice = null;
 
   try {
     await User.create(
@@ -407,6 +409,65 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     );
     assert.equal(stillListed, false, "removed MLS member must not appear in openGroup members");
 
+    const shadowDeviceUserId = `${userB.id}_x1`;
+    createdUserIds.push(shadowDeviceUserId);
+    await Promise.all([
+      User.create({
+        id: shadowDeviceUserId,
+        username: `gb_device_${ts}`,
+        hashedPassword: "x",
+        publicIdentityKeyX25519: "x",
+        publicIdentityKeyEd25519: "x",
+        signedPreKey: "x",
+        signature: "x",
+      }),
+      User.updateOne({ id: userB.id }, { $addToSet: { devices: shadowDeviceUserId } }),
+      Device().create({
+        deviceId: `device-${shadowDeviceUserId}`,
+        parentUserId: userB.id,
+        deviceUserId: shadowDeviceUserId,
+      }),
+    ]);
+
+    const shadowGroupAck = await emitAck(a, "createGroup", {
+      name: `MLS Shadow ${ts}`,
+      memberIds: [userB.id],
+      mlsEnabled: true,
+      cipherSuite: "Echo-MLS-TreeKEM/X25519_AES256GCM_SHA256",
+    });
+    assert.equal(shadowGroupAck?.success, true);
+    const shadowGroupId = String(shadowGroupAck.group.groupId);
+    createdGroupIds.push(shadowGroupId);
+
+    await GroupMember().updateOne(
+      { groupId: shadowGroupId, userId: userB.id },
+      { $set: { status: "removed" } }
+    );
+    await GroupMember().create({
+      groupId: shadowGroupId,
+      userId: shadowDeviceUserId,
+      role: "member",
+      joinedAt: new Date(),
+      leafIndex: 7,
+      status: "active",
+    });
+
+    bDevice = await connectAuthed({ port, id: shadowDeviceUserId, username: `gb_device_${ts}` });
+    const shadowSendAck = await emitAck(bDevice, "sendGroupMessage", {
+      groupId: shadowGroupId,
+      messageType: "text",
+      contentType: "application",
+      headerB64: "header",
+      ciphertextB64: "ciphertext",
+      epoch: 0,
+      senderLeafIndex: 7,
+    });
+    assert.equal(
+      shadowSendAck?.success,
+      true,
+      "active re-add/device membership must not be shadowed by a removed parent row"
+    );
+
     // Non-admin cannot add members.
     const addByMemberAck = await emitAck(b, "addGroupMember", { groupId, memberId: `X-${ts}` });
     assert.equal(addByMemberAck?.success, false);
@@ -444,7 +505,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
     const eInfoAck = await emitAck(e, "groupAdded", { groupId });
     assert.equal(eInfoAck?.success, false);
   } finally {
-    for (const client of [a, b, c, d, e]) {
+    for (const client of [a, b, c, d, e, bDevice]) {
       try {
         if (client) client.disconnect();
       } catch {}
@@ -456,6 +517,7 @@ test("group system: create/list/open/send/add/remove (happy path + authz)", asyn
       GroupMember().deleteMany({ groupId: { $in: createdGroupIds } }),
       GroupSequence().deleteMany({ groupId: { $in: createdGroupIds } }),
       Group().deleteMany({ groupId: { $in: createdGroupIds } }),
+      Device().deleteMany({ parentUserId: { $in: createdUserIds } }),
       User.deleteMany({ id: { $in: createdUserIds } }),
     ]);
 

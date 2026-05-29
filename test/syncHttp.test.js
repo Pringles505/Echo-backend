@@ -84,6 +84,27 @@ test('GET /sync/sessions/:sessionId forwards the target session token header', a
   assert.equal(captured.targetAccessToken, 'target-token');
 });
 
+test('GET /sync/dh-session/:sessionId forwards the target session token header', async () => {
+  let captured = null;
+  const service = {
+    getDhSession: async (input) => {
+      captured = input;
+      return { sessionId: 'S1', status: 'completed', sourceEphemeralPubKey: 'scanner-pub' };
+    },
+  };
+  const app = buildApp({ deviceSyncService: service });
+
+  const res = await request(app)
+    .get('/sync/dh-session/S1')
+    .set('X-Sync-Target-Token', 'target-token');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.session.status, 'completed');
+  assert.equal(captured.sessionId, 'S1');
+  assert.equal(captured.targetAccessToken, 'target-token');
+});
+
 test('POST /sync/dh-transfer-chunk is public with target token and forwards chunk', async () => {
   let captured = null;
   const service = {
