@@ -89,21 +89,32 @@ const CORS_ALLOWED_ORIGINS = parseListEnv('CORS_ALLOWED_ORIGINS');
  *   3. Development: allow any origin (`true`) so LAN phones, Vite proxy
  *      and Tauri dev windows just work.
  */
-const PRODUCTION_DEFAULT_ORIGINS = [
-  // NOTE: this is a Vercel per-deployment URL (contains a build hash) and will
-  // change on every frontend deploy. Replace with the stable production alias
-  // (e.g. https://echo-frontend.vercel.app) once confirmed in Vercel → Domains.
-  'https://echo-frontend-hia4mbdxj-miguel-mascaros-projects.vercel.app',
+// The Tauri desktop app always loads the UI from these fixed scheme/host
+// origins (tauri://localhost on macOS/Linux, http(s)://tauri.localhost on
+// Windows WebView2). They are a constant, safe set and MUST be allowed
+// regardless of how CORS_ALLOWED_ORIGINS is configured for the web frontend —
+// otherwise desktop device-sync/pairing fetches fail CORS with "Failed to
+// fetch" because the backend omits Access-Control-Allow-Origin for them.
+const TAURI_DESKTOP_ORIGINS = [
   'tauri://localhost',
   'http://tauri.localhost',
   'https://tauri.localhost',
 ];
 
+const PRODUCTION_DEFAULT_ORIGINS = [
+  // NOTE: this is a Vercel per-deployment URL (contains a build hash) and will
+  // change on every frontend deploy. Replace with the stable production alias
+  // (e.g. https://echo-frontend.vercel.app) once confirmed in Vercel → Domains.
+  'https://echo-frontend-hia4mbdxj-miguel-mascaros-projects.vercel.app',
+  ...TAURI_DESKTOP_ORIGINS,
+];
+
 let CORS_ORIGINS;
 if (CORS_ALLOWED_ORIGINS.length > 0) {
-  CORS_ORIGINS = CORS_ALLOWED_ORIGINS;
+  // Explicit allow-list still always keeps the desktop origins.
+  CORS_ORIGINS = [...new Set([...CORS_ALLOWED_ORIGINS, ...TAURI_DESKTOP_ORIGINS])];
 } else if (process.env.NODE_ENV === 'production') {
-  CORS_ORIGINS = [...PRODUCTION_DEFAULT_ORIGINS, ...CORS_EXTRA_ORIGINS];
+  CORS_ORIGINS = [...new Set([...PRODUCTION_DEFAULT_ORIGINS, ...CORS_EXTRA_ORIGINS])];
 } else {
   CORS_ORIGINS = true;
 }
