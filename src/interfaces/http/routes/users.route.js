@@ -205,16 +205,23 @@ function createUsersRouter(deps = {}) {
 
         const user = await userProfileService.updateProfile({ userId, changes });
         // Broadcast profile updates so open UIs and notifications refresh avatars
+        // Emit to each user's room so ALL of their devices receive the event,
+        // not just the last socket in userSocketMap (emitToUser targets one).
         try {
           const payload = {
             userId: user.id,
             username: user.username,
             profilePicture: user.profilePicture || '',
           };
-          if (notifier && typeof notifier.listOnlineUserIds === 'function' && typeof notifier.emitToUser === 'function') {
+          if (
+            notifier &&
+            typeof notifier.listOnlineUserIds === 'function' &&
+            // prefer room fanout (every device joined the parent userId room)
+            typeof notifier.emitToRoom === 'function'
+          ) {
             const onlineIds = notifier.listOnlineUserIds();
             for (const uid of Array.isArray(onlineIds) ? onlineIds : []) {
-              notifier.emitToUser(uid, 'userProfileUpdated', payload);
+              notifier.emitToRoom(String(uid), 'userProfileUpdated', payload);
             }
           }
         } catch (broadcastErr) {
