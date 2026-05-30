@@ -7,6 +7,15 @@
 /**
  * @typedef {object} MessageSeenPayload
  * @property {string} targetUserId - User ID whose messages were seen
+ * @property {string} [conversationKey] - When present, only messages in this
+ *   per-device conversation are marked seen (per-device fanout correctness).
+ */
+
+/**
+ * @typedef {object} MessageDeliveredPayload
+ * @property {string} targetUserId - The original sender whose messages reached
+ *   this device (i.e. the user to notify with the delivered receipt).
+ * @property {string} [conversationKey] - Optional per-device conversation scope.
  */
 
 /**
@@ -90,20 +99,78 @@ function registerDirectMessagingSocketHandlers(deps) {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return;
 
-    const { targetUserId } = data;
+    const { targetUserId, conversationKey } = data ?? {};
+    if (!targetUserId) return;
     console.log('Message from ', authedUserId, ' seen by ', targetUserId);
 
     try {
-      const result = await Message.updateMany(
-        { userId: targetUserId, targetUserId: authedUserId, seenStatus: false },
-        { $set: { seenStatus: true } }
-      );
+      // Mark every still-unread message sent FROM the peer TO us as seen.
+      // When a conversationKey is supplied, scope to that per-device fanout
+      // conversation so sibling-device copies in other conversations aren't
+      // touched; otherwise fall back to the account-level match.
+      const filter = {
+        userId: targetUserId,
+        targetUserId: authedUserId,
+        seenStatus: false,
+      };
+      if (conversationKey) filter.conversationKey = String(conversationKey);
+
+      const seenAt = new Date();
+      const result = await Message.updateMany(filter, {
+        $set: { seenStatus: true, seenAt },
+      });
 
       console.log('Updated messages seenStatus:', result);
 
-      io.to(targetUserId).emit('messageSeenUpdate', { userId: authedUserId, targetUserId });
+      // The original sender flips their outgoing bubbles to "read". We also
+      // notify the reader's own sibling devices so they can reconcile local
+      // seen state / unread badges (payload.userId === their own id).
+      const payload = { userId: authedUserId, targetUserId, seenAt: seenAt.toISOString() };
+      io.to(targetUserId).emit('messageSeenUpdate', payload);
+      if (authedUserId !== targetUserId) {
+        io.to(authedUserId).emit('messageSeenUpdate', payload);
+      }
     } catch (err) {
       console.error('Error updating seenStatus:', err);
+    }
+  });
+
+  /**
+   * 'messageDelivered' event - Mark messages from a peer as delivered to this
+   * device (received + persisted), distinct from being read. Emits
+   * 'messageDeliveredUpdate' to the original sender so their bubbles can show a
+   * "delivered" state before the recipient actually opens the conversation.
+   * @event messageDelivered
+   * @type {MessageDeliveredPayload}
+   */
+  socket.on('messageDelivered', async (data) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return;
+
+    const { targetUserId, conversationKey } = data ?? {};
+    if (!targetUserId || targetUserId === authedUserId) return;
+
+    try {
+      // Stamp deliveredAt on still-undelivered inbound messages from the peer.
+      // Never clobber a delivered/seen message; `deliveredAt: null` keeps this
+      // idempotent so repeated delivered pings don't churn timestamps.
+      const filter = {
+        userId: targetUserId,
+        targetUserId: authedUserId,
+        deliveredAt: null,
+      };
+      if (conversationKey) filter.conversationKey = String(conversationKey);
+
+      const deliveredAt = new Date();
+      await Message.updateMany(filter, { $set: { deliveredAt } });
+
+      io.to(targetUserId).emit('messageDeliveredUpdate', {
+        userId: authedUserId,
+        targetUserId,
+        deliveredAt: deliveredAt.toISOString(),
+      });
+    } catch (err) {
+      console.error('Error updating deliveredStatus:', err);
     }
   });
 

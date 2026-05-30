@@ -100,16 +100,24 @@ function createMessagingService({
     async markMessagesSeen({ userId, targetUserId }) {
       const { authedUserId, targetUserIdStr } = normalizeIds({ userId, targetUserId });
 
+      const seenAt = new Date();
       const result = await Message.updateMany(
         { userId: targetUserIdStr, targetUserId: authedUserId, seenStatus: false },
-        { $set: { seenStatus: true } }
+        { $set: { seenStatus: true, seenAt } }
       );
 
       if (notifier && typeof notifier.emitToUser === 'function') {
-        notifier.emitToUser(targetUserIdStr, 'messageSeenUpdate', {
+        const payload = {
           userId: authedUserId,
           targetUserId: targetUserIdStr,
-        });
+          seenAt: seenAt.toISOString(),
+        };
+        // Notify the original sender (flips their bubbles to "read") and the
+        // reader's own sibling devices (reconcile local seen state).
+        notifier.emitToUser(targetUserIdStr, 'messageSeenUpdate', payload);
+        if (authedUserId !== targetUserIdStr) {
+          notifier.emitToUser(authedUserId, 'messageSeenUpdate', payload);
+        }
       }
 
       const updatedCount = Number.isFinite(result?.modifiedCount)

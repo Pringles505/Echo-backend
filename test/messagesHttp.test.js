@@ -210,10 +210,16 @@ test('createMessagingService.markMessagesSeen emits messageSeenUpdate via notifi
 
   const result = await svc.markMessagesSeen({ userId: 'U1', targetUserId: 'U2' });
   assert.deepEqual(result, { updatedCount: 2 });
-  assert.equal(events.length, 1);
-  assert.equal(events[0].userId, 'U2');
-  assert.equal(events[0].event, 'messageSeenUpdate');
-  assert.deepEqual(events[0].payload, { userId: 'U1', targetUserId: 'U2' });
+  // Emits to the original sender (U2) AND back to the reader's own siblings (U1).
+  assert.equal(events.length, 2);
+  const byRoom = Object.fromEntries(events.map((e) => [e.userId, e]));
+  assert.ok(byRoom.U2 && byRoom.U1);
+  for (const e of events) {
+    assert.equal(e.event, 'messageSeenUpdate');
+    assert.equal(e.payload.userId, 'U1');
+    assert.equal(e.payload.targetUserId, 'U2');
+    assert.equal(typeof e.payload.seenAt, 'string');
+  }
 });
 
 test('createMessagingService.getLatestMessageNumber returns -1 when sequence is new', async () => {

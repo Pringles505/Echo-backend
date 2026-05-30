@@ -54,6 +54,12 @@ function createModels(mongoose) {
     peerDeviceUserId: { type: String, default: null },
     conversationUserId: { type: String, default: null },
     seenStatus: { type: Boolean, default: false },
+    // Read-receipt lifecycle timestamps. `seenStatus` is kept in lockstep with
+    // `seenAt` (true iff seenAt !== null) for backward compatibility with older
+    // clients/queries that only know the boolean. `deliveredAt` is reserved for
+    // Phase 2 (delivered-vs-read) and currently unused by Phase 1.
+    deliveredAt: { type: Date, default: null },
+    seenAt: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now },
     messageType: {
       type: String,
