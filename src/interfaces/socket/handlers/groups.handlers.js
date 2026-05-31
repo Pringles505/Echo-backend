@@ -924,6 +924,54 @@ function registerGroupsSocketHandlers(deps) {
     }
   });
 
+  /**
+   * 'groupTyping' / 'groupStopTyping' - Relay an ephemeral typing indicator to
+   * the other members of a group. Fans out to every member's per-user delivery
+   * rooms (NOT just the `group:<id>` room, which a member only joins after
+   * opening the group) so the conversation-list preview can show it too. The
+   * typist's own rooms are excluded. Carries no message content.
+   */
+  socket.on('groupTyping', async ({ groupId } = {}) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId || !groupId) return;
+    try {
+      const { userId: accountId } = await resolveAccountUserId(authedUserId);
+      const [user, { ids: senderRooms }] = await Promise.all([
+        User.findOne({ id: accountId }, { username: 1 }).lean(),
+        collectAccountDeliveryIds(accountId),
+      ]);
+      await emitEventToGroupMembers({
+        groupId,
+        eventName: 'groupTyping',
+        payload: {
+          groupId: String(groupId),
+          userId: String(accountId),
+          username: user?.username ?? 'Member',
+        },
+        excludeUserIds: senderRooms,
+      });
+    } catch (err) {
+      console.error('Error relaying groupTyping:', err);
+    }
+  });
+
+  socket.on('groupStopTyping', async ({ groupId } = {}) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId || !groupId) return;
+    try {
+      const { userId: accountId } = await resolveAccountUserId(authedUserId);
+      const { ids: senderRooms } = await collectAccountDeliveryIds(accountId);
+      await emitEventToGroupMembers({
+        groupId,
+        eventName: 'groupStopTyping',
+        payload: { groupId: String(groupId), userId: String(accountId) },
+        excludeUserIds: senderRooms,
+      });
+    } catch (err) {
+      console.error('Error relaying groupStopTyping:', err);
+    }
+  });
+
   socket.on('sendGroupWelcome', async ({ groupId, recipientUserId, welcome }, cb) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });

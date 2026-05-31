@@ -131,6 +131,33 @@ function registerPresenceSocketHandlers({ socket, io, userSocketMap, Message, Us
   });
 
   /**
+   * 'typing' event - Relay a typing indicator to the peer of a 1:1 chat.
+   * Ephemeral; carries no message content, only the typist's user id. The
+   * peer's user room is always joined, so this reaches every device of the
+   * peer (active chat popup + conversation preview).
+   * @event typing
+   * @param {object} data
+   * @param {string} data.targetUserId - The peer to notify.
+   */
+  socket.on('typing', ({ targetUserId } = {}) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId || !targetUserId) return;
+    io.to(String(targetUserId)).emit('peerTyping', { userId: authedUserId });
+  });
+
+  /**
+   * 'stopTyping' event - Clear a previously sent typing indicator.
+   * @event stopTyping
+   * @param {object} data
+   * @param {string} data.targetUserId - The peer to notify.
+   */
+  socket.on('stopTyping', ({ targetUserId } = {}) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId || !targetUserId) return;
+    io.to(String(targetUserId)).emit('peerStopTyping', { userId: authedUserId });
+  });
+
+  /**
    * 'disconnect' event - Handle socket disconnection and cleanup.
    * Removes user from online map and broadcasts offline event.
    * @event disconnect
