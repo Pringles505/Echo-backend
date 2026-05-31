@@ -134,6 +134,8 @@ function createModels(mongoose) {
   const groupSchema = new mongoose.Schema({
     groupId: { type: String, unique: true, index: true },
     name: String,
+    description: { type: String, default: '' },
+    profilePicture: { type: String, default: '' },
     createdAt: { type: Date, default: Date.now },
     createdBy: String,
     mlsEnabled: { type: Boolean, default: false },

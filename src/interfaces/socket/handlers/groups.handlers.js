@@ -311,6 +311,8 @@ function registerGroupsSocketHandlers(deps) {
       group: {
         groupId: group.groupId,
         name: group.name,
+        description: group.description ?? '',
+        profilePicture: group.profilePicture ?? '',
         createdBy: group.createdBy,
         createdAt: group.createdAt,
         mlsEnabled: group.mlsEnabled,
@@ -498,6 +500,8 @@ function registerGroupsSocketHandlers(deps) {
         return {
           groupId: g.groupId,
           name: g.name,
+          description: g.description ?? '',
+          profilePicture: g.profilePicture ?? '',
           role: m.role,
           joinedAt: m.joinedAt,
           createdAt: g.createdAt,
@@ -532,6 +536,86 @@ function registerGroupsSocketHandlers(deps) {
     } catch (err) {
       console.error('Error opening group:', err);
       cb?.({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * 'updateGroupProfile' — change a group's picture and/or description. Any
+   * active member may edit. Broadcasts `groupUpdated` (with the actor + which
+   * fields changed) to every member so clients refresh and can render a
+   * "X changed group picture" system row.
+   */
+  socket.on('updateGroupProfile', async ({ groupId, description, profilePicture } = {}, cb) => {
+    const authedUserId = socket.user?.id;
+    if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
+    const groupIdStr = String(groupId ?? '');
+    if (!groupIdStr) return cb?.({ success: false, error: 'Invalid groupId' });
+
+    try {
+      const resolved = await resolveGroupUserId(groupIdStr, authedUserId);
+      const membership = resolved.membership;
+      if (!membership || membership.status === 'removed') {
+        return cb?.({ success: false, error: 'forbidden' });
+      }
+
+      const group = await Group.findOne({ groupId: groupIdStr });
+      if (!group) return cb?.({ success: false, error: 'Group not found' });
+
+      let descriptionChanged = false;
+      let pictureChanged = false;
+
+      if (typeof description === 'string') {
+        const next = description.slice(0, 500);
+        if (next !== (group.description ?? '')) {
+          group.description = next;
+          descriptionChanged = true;
+        }
+      }
+      if (typeof profilePicture === 'string') {
+        // The client compresses the image; cap stored size so a bad payload
+        // can't bloat the doc / every openGroup broadcast.
+        const next = profilePicture.slice(0, 300000);
+        if (next !== (group.profilePicture ?? '')) {
+          group.profilePicture = next;
+          pictureChanged = true;
+        }
+      }
+
+      if (descriptionChanged || pictureChanged) {
+        await group.save();
+      }
+
+      const actor = await User.findOne({ id: resolved.userId }, { username: 1 }).lean();
+      const groupPayload = {
+        groupId: group.groupId,
+        name: group.name,
+        description: group.description ?? '',
+        profilePicture: group.profilePicture ?? '',
+        mlsEnabled: group.mlsEnabled,
+        epoch: group.epoch,
+        cipherSuite: group.cipherSuite,
+      };
+
+      if (descriptionChanged || pictureChanged) {
+        await emitEventToGroupMembers({
+          groupId: groupIdStr,
+          eventName: 'groupUpdated',
+          payload: {
+            groupId: groupIdStr,
+            group: groupPayload,
+            changedBy: actor?.username ?? 'A member',
+            changedByUserId: String(resolved.userId),
+            pictureChanged,
+            descriptionChanged,
+            at: new Date().toISOString(),
+          },
+        });
+      }
+
+      return cb?.({ success: true, group: groupPayload });
+    } catch (err) {
+      console.error('Error updating group profile:', err);
+      return cb?.({ success: false, error: 'Internal server error' });
     }
   });
 
