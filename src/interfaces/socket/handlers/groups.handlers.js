@@ -896,25 +896,39 @@ function registerGroupsSocketHandlers(deps) {
         encryptedSenderDataB64: message.encryptedSenderDataB64 ?? null,
       };
 
+      // Members who currently have the group open are in `room` and get the
+      // message immediately. Ack the sender now — the persist + in-room delivery
+      // is what they're waiting on. The remaining per-member fan-out (so the
+      // conversation-list PREVIEW updates for members who DON'T have the group
+      // open) is delivery-only and used to be awaited before the ack, inserting
+      // ~3-4 DB queries per member between send and ack — a latency that scaled
+      // with group size. It now runs after the ack and never blocks the sender.
       io.to(room).emit('newGroupMessage', messageWithProfile);
-
-      const members = await GroupMember.find(
-        { groupId: groupIdStr, status: { $ne: 'removed' } },
-        { userId: 1 }
-      ).lean();
-      const notifiedRooms = new Set([room]);
-      for (const m of members) {
-        const memberId = String(m?.userId ?? '');
-        if (!memberId) continue;
-        const { ids } = await collectAccountDeliveryIds(memberId);
-        for (const id of ids) {
-          if (!id || notifiedRooms.has(id)) continue;
-          io.to(id).except(room).emit('newGroupMessage', messageWithProfile);
-          notifiedRooms.add(id);
-        }
-      }
-
       ack({ success: true, seq });
+
+      void (async () => {
+        try {
+          const members = await GroupMember.find(
+            { groupId: groupIdStr, status: { $ne: 'removed' } },
+            { userId: 1 }
+          ).lean();
+          const notifiedRooms = new Set([room]);
+          for (const m of members) {
+            const memberId = String(m?.userId ?? '');
+            if (!memberId) continue;
+            const { ids } = await collectAccountDeliveryIds(memberId);
+            for (const id of ids) {
+              if (!id || notifiedRooms.has(id)) continue;
+              io.to(id).except(room).emit('newGroupMessage', messageWithProfile);
+              notifiedRooms.add(id);
+            }
+          }
+        } catch (fanoutErr) {
+          // The message is already persisted and delivered to the open-group
+          // room; a preview fan-out failure must not surface as a send failure.
+          console.error('Group preview fan-out failed (message already sent):', fanoutErr);
+        }
+      })();
     } catch (err) {
       console.error('Error saving group message:', err);
       const details = process.env.NODE_ENV && process.env.NODE_ENV.toLowerCase() === 'production'
