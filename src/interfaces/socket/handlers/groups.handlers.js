@@ -341,11 +341,18 @@ function registerGroupsSocketHandlers(deps) {
     };
   };
 
-  socket.on('createGroup', async ({ name, memberIds, mlsEnabled, cipherSuite }, cb) => {
+  socket.on('createGroup', async ({ name, memberIds, mlsEnabled, cipherSuite, desc, description, profilePicture } = {}, cb) => {
     const authedUserId = socket.user?.id;
     if (!authedUserId) return cb?.({ success: false, error: 'unauthorized' });
     if (!name || typeof name !== 'string' || name.trim().length === 0) return cb?.({ success: false, error: 'Group name is required' });
     if (!Array.isArray(memberIds) || memberIds.length === 0) return cb?.({ success: false, error: 'At least one member is required' });
+
+    // Persist the picture/description atomically at creation. Same caps as
+    // updateGroupProfile. `description` is the canonical key; `desc` is accepted
+    // for backwards-compat with the original create payload.
+    const rawDescription = typeof description === 'string' ? description : typeof desc === 'string' ? desc : '';
+    const groupDescription = rawDescription.slice(0, 500);
+    const groupProfilePicture = typeof profilePicture === 'string' ? profilePicture.slice(0, 300000) : '';
 
     const wantsMls = mlsEnabled === true;
     const normalizedCipherSuite = wantsMls
@@ -375,6 +382,8 @@ function registerGroupsSocketHandlers(deps) {
           await Group.create({
             groupId: candidate,
             name,
+            description: groupDescription,
+            profilePicture: groupProfilePicture,
             createdBy: authedUserIdStr,
             createdAt: new Date(),
             mlsEnabled: wantsMls,
@@ -414,6 +423,8 @@ function registerGroupsSocketHandlers(deps) {
         await emitToAccount(memberId, 'groupAdded', {
           groupId,
           name,
+          description: groupDescription,
+          profilePicture: groupProfilePicture,
           addedByUserId: authedUserIdStr,
           addedByUsername: creatorUsername,
           role: 'member',
@@ -424,6 +435,8 @@ function registerGroupsSocketHandlers(deps) {
       await emitToAccount(authedUserIdStr, 'groupAdded', {
         groupId,
         name,
+        description: groupDescription,
+        profilePicture: groupProfilePicture,
         addedByUserId: authedUserIdStr,
         addedByUsername: creatorUsername,
         role: 'admin',
@@ -431,7 +444,7 @@ function registerGroupsSocketHandlers(deps) {
       });
       cb?.({
         success: true,
-        group: { groupId, name, mlsEnabled: wantsMls, epoch: 0, cipherSuite: normalizedCipherSuite },
+        group: { groupId, name, description: groupDescription, profilePicture: groupProfilePicture, mlsEnabled: wantsMls, epoch: 0, cipherSuite: normalizedCipherSuite },
         members: [
           { userId: authedUserIdStr, leafIndex: 0 },
           ...normalizedMemberIds.map((id, index) => ({ userId: id, leafIndex: index + 1 })),

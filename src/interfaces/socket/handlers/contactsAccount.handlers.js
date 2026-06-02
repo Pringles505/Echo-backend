@@ -162,17 +162,22 @@ function registerContactsAccountSocketHandlers({ socket, io, userSocketMap, User
   });
 
   socket.on('getUserInfo', async ({ userId }, cb) => {
+    // Defense-in-depth: the global socket middleware already blocks
+    // unauthenticated events, but mirror the explicit guard used by
+    // updateUserInfo/deleteAccount so this handler is safe in isolation.
+    if (!socket.user?.id) return cb?.({ success: false, error: 'unauthorized' });
     try {
       const user = await User.findOne({ id: userId });
       if (user) {
         cb({
           success: true,
+          // Public profile fields only. The target's `friends` list is private
+          // and was previously leaked to any authenticated caller — do not return it.
           user: {
             id: user.id,
             username: user.username,
             aboutme: user.aboutme,
             profilePicture: user.profilePicture,
-            friends: user.friends,
           },
         });
       } else {
