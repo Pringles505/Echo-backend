@@ -732,6 +732,11 @@ function registerGroupsSocketHandlers(deps) {
         io.to(deliveryId).emit('groupAdded', {
           groupId: groupIdStr,
           name: group.name,
+          // Carry the group's profile so the new member's list shows the real
+          // picture/description immediately, instead of a default glyph until
+          // they open the group (which is when openGroup first returns them).
+          profilePicture: group.profilePicture || '',
+          description: group.description || '',
           addedByUserId: resolved.userId,
           addedByUsername: sender?.username ?? null,
           role: 'member',
@@ -1001,7 +1006,12 @@ function registerGroupsSocketHandlers(deps) {
       // ~3-4 DB queries per member between send and ack — a latency that scaled
       // with group size. It now runs after the ack and never blocks the sender.
       io.to(room).emit('newGroupMessage', messageWithProfile);
-      ack({ success: true, seq });
+      ack({
+        success: true,
+        seq,
+        messageId: String(message._id),
+        createdAt: message.createdAt,
+      });
 
       void (async () => {
         try {

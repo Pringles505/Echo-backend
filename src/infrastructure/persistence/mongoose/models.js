@@ -63,7 +63,7 @@ function createModels(mongoose) {
     createdAt: { type: Date, default: Date.now },
     messageType: {
       type: String,
-      enum: ['text', 'image', 'tenor', 'call_event'],
+      enum: ['text', 'image', 'video', 'tenor', 'call_event'],
       default: 'text',
     },
     callData: {

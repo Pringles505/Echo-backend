@@ -2,30 +2,37 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs/promises');
-const os = require('os');
 
 const { persistImageDataUrl } = require('../src/interfaces/socket/context/imageStorage');
+const { UPLOADS_DIR } = require('../src/shared/constants');
 
 const ALLOWED = ['image/png', 'image/jpeg', 'image/webp'];
 
-// Each test creates a unique workdir under the OS tmp dir so writes do not
-// pollute the project's /uploads folder. We chdir back at the end.
-async function withTmpCwd(fn) {
-  const original = process.cwd();
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'echo-imgstore-'));
-  process.chdir(dir);
+// persistImageDataUrl writes to the project's uploads dir (resolved relative to
+// its own module path, so it is independent of process.cwd()). The helper runs
+// the body against that real dir, then removes only the files the test created
+// so the suite stays hermetic.
+const UPLOADS_PATH = path.join(__dirname, '..', UPLOADS_DIR);
+
+async function withUploads(fn) {
+  await fs.mkdir(UPLOADS_PATH, { recursive: true });
+  const before = new Set(await fs.readdir(UPLOADS_PATH).catch(() => []));
   try {
-    return await fn(dir);
+    return await fn(UPLOADS_PATH);
   } finally {
-    process.chdir(original);
-    await fs.rm(dir, { recursive: true, force: true });
+    const after = await fs.readdir(UPLOADS_PATH).catch(() => []);
+    await Promise.all(
+      after
+        .filter((name) => !before.has(name))
+        .map((name) => fs.rm(path.join(UPLOADS_PATH, name), { force: true }))
+    );
   }
 }
 
 // ----------------------------- happy paths -----------------------------
 
 test('PNG data URL is written with .png extension', async () => {
-  await withTmpCwd(async (dir) => {
+  await withUploads(async (dir) => {
     const url = await persistImageDataUrl({
       dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
       allowedMimeTypes: ALLOWED,
@@ -34,13 +41,13 @@ test('PNG data URL is written with .png extension', async () => {
       userId: 'U1',
     });
     assert.match(url, /^\/uploads\/banner-U1-\d+\.png$/);
-    const stat = await fs.stat(path.join(dir, 'uploads', path.basename(url)));
+    const stat = await fs.stat(path.join(dir, path.basename(url)));
     assert.ok(stat.size > 0);
   });
 });
 
 test('JPEG data URL is written with .jpg extension (not .png)', async () => {
-  await withTmpCwd(async () => {
+  await withUploads(async () => {
     const url = await persistImageDataUrl({
       dataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
       allowedMimeTypes: ALLOWED,
@@ -53,7 +60,7 @@ test('JPEG data URL is written with .jpg extension (not .png)', async () => {
 });
 
 test('WebP data URL is written with .webp extension', async () => {
-  await withTmpCwd(async () => {
+  await withUploads(async () => {
     const url = await persistImageDataUrl({
       dataUrl: 'data:image/webp;base64,UklGRiQAAABXRUJQ',
       allowedMimeTypes: ALLOWED,

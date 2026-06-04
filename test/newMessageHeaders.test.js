@@ -94,8 +94,11 @@ test("newMessage persists sendingNumber and previousSendingNumber", async () => 
       previousSendingNumber,
     });
 
-    // Wait until the message appears (poll)
-    const deadline = Date.now() + 3000;
+    // Wait until the message appears (poll). The window is generous because the
+    // full suite runs test files concurrently against a shared remote Mongo, so
+    // the async persistence of this newMessage can lag well past a second under
+    // peak load even though the write itself always succeeds.
+    const deadline = Date.now() + 15000;
     let saved = null;
     while (Date.now() < deadline) {
       // eslint-disable-next-line no-await-in-loop

@@ -124,6 +124,17 @@ const statusLimiter = rateLimit({
   handler: standardJsonHandler,
 });
 
+// Encrypted media uploads are large (up to MEDIA_MAX_SIZE per blob). Keyed per
+// authenticated user to bound disk/bandwidth abuse from a single account.
+const mediaUploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: authAwareKey,
+  handler: standardJsonHandler,
+});
+
 module.exports = {
   authAwareKey,
   loginLimiter,
@@ -136,4 +147,5 @@ module.exports = {
   eventRegisterLimiter,
   bannerLimiter,
   statusLimiter,
+  mediaUploadLimiter,
 };

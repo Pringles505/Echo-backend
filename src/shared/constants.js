@@ -165,6 +165,14 @@ const BANNER_MAX_SIZE = parseIntEnv('BANNER_MAX_SIZE', 8_000_000);
 
 const BANNER_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
+// Encrypted media blobs (video/etc). Stored as opaque ciphertext under
+// MEDIA_DIR — NOT served by the public /uploads static mount. The size cap is
+// applied to the *ciphertext* upload body (a touch above the client plaintext
+// cap to allow for the per-chunk AEAD tag + container header overhead).
+const MEDIA_DIR = parseStringEnv('MEDIA_DIR', 'media');
+
+const MEDIA_MAX_SIZE = parseIntEnv('MEDIA_MAX_SIZE', 30_000_000);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Blog / Community / Support Configuration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,6 +343,8 @@ module.exports = {
   UPLOADS_DIR,
   BANNER_MAX_SIZE,
   BANNER_MIME_TYPES,
+  MEDIA_DIR,
+  MEDIA_MAX_SIZE,
 
   // Blog / Community / Support
   BLOG_SLUG_MAX_LENGTH,

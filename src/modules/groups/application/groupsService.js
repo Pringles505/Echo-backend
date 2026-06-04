@@ -339,6 +339,10 @@ function createGroupsService({
       safeNotify(memberIdStr, 'groupAdded', {
         groupId: groupIdStr,
         name: group.name,
+        // Carry the group's profile so the new member's list shows the real
+        // picture/description immediately, not a default glyph until they open it.
+        profilePicture: group.profilePicture || '',
+        description: group.description || '',
         addedByUserId: authedUserId,
         role: 'member',
         at: nowIso,

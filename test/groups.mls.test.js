@@ -9,6 +9,7 @@
  *   Item #20 — publishKeyPackage scopes packages per (userId, clientId)
  */
 const test   = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const fs     = require('node:fs');
@@ -60,6 +61,17 @@ function emitAck(client, event, payload) {
     client.emit(event, payload, (ack) => resolve(ack));
   });
 }
+
+// Each test closes the shared HTTP server, but the Mongo connection stays open
+// and keeps the event loop alive — without this the process never exits after
+// the tests pass and the runner is eventually SIGTERM'd (reported as a failure).
+after(async () => {
+  try {
+    await mongoose.disconnect();
+  } catch {
+    /* already disconnected */
+  }
+});
 
 // ── Item #17: sendGroupCommit epoch validation ───────────────────────────────
 

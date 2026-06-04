@@ -44,8 +44,12 @@ test('register/login works from empty state with valid key bundle', async () => 
   const ts = Date.now();
   const username = `auth_user_${ts}`;
   const password = 's3cure-pass';
+  // Login is now per-device: it requires a paired deviceId. Registering with a
+  // deviceId provisions the account's primary device, which login then uses.
+  const deviceId = `auth-device-${ts}`;
 
   let client = null;
+  let registeredDeviceId = null;
   try {
     client = ioClient(`http://localhost:${port}`, {
       transports: ['websocket'],
@@ -62,14 +66,20 @@ test('register/login works from empty state with valid key bundle', async () => 
         oneTimePreKeys: [{ opkId: 'opk-1', publicKey: 'opk-public-key' }],
       },
       aboutme: 'new user',
+      deviceId,
+      deviceName: 'Test primary device',
+      platform: 'test',
     });
 
     assert.equal(registerAck?.success, true);
     assert.ok(registerAck?.userId);
+    // Register may remap the deviceId on a collision, so use what it returned.
+    registeredDeviceId = registerAck.deviceId || deviceId;
 
     const loginAck = await emitAck(client, 'login', {
       username,
       password,
+      deviceId: registeredDeviceId,
     });
 
     assert.equal(loginAck?.success, true);
@@ -82,6 +92,10 @@ test('register/login works from empty state with valid key bundle', async () => 
   } finally {
     if (client) client.disconnect();
     await User.deleteMany({ username });
+    const Device = mongoose.models.Device;
+    if (Device && registeredDeviceId) {
+      await Device.deleteMany({ deviceId: registeredDeviceId }).catch(() => {});
+    }
     await new Promise((resolve) => server.close(resolve));
     await mongoose.disconnect();
   }

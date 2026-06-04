@@ -26,6 +26,7 @@ const { createSequenceService } = require('./src/interfaces/socket/context/seque
 const { createOpkLimiterService } = require('./src/interfaces/socket/context/opkLimiter');
 const { saveProfilePicture } = require('./src/interfaces/socket/context/profilePictureStorage');
 const { saveBanner } = require('./src/interfaces/socket/context/bannerStorage');
+const mediaStorage = require('./src/interfaces/socket/context/mediaStorage');
 const { createSocketNotifier } = require('./src/interfaces/socket/notifier');
 const { registerSocketHandlers } = require('./src/interfaces/socket/registerSocketHandlers');
 const { healthRouter } = require('./src/interfaces/http/routes/health.route');
@@ -45,6 +46,7 @@ const { createPairingRouter } = require('./src/interfaces/http/routes/pairing.ro
 const { createDevicesRouter } = require('./src/interfaces/http/routes/devices.route');
 const { createEnvelopesRouter } = require('./src/interfaces/http/routes/envelopes.route');
 const { createSyncRouter } = require('./src/interfaces/http/routes/sync.route');
+const { createMediaRouter } = require('./src/interfaces/http/routes/media.route');
 const { createPairingService } = require('./src/modules/devices/application/pairingService');
 const { createDeviceManagementService } = require('./src/modules/devices/application/deviceManagementService');
 const { createDeviceSyncService } = require('./src/modules/deviceSync/application/deviceSyncService');
@@ -62,6 +64,7 @@ const {
   eventRegisterLimiter,
   bannerLimiter,
   statusLimiter,
+  mediaUploadLimiter,
 } = require('./src/interfaces/http/middleware/rateLimit');
 const {
   OPK_MAX_STORED,
@@ -268,6 +271,7 @@ const pairingRouter = createPairingRouter({ pairingService, mongoose, requireAut
 const devicesRouter = createDevicesRouter({ deviceManagementService, mongoose, requireAuth });
 const envelopesRouter = createEnvelopesRouter({ deviceManagementService, mongoose, requireAuth });
 const syncRouter = createSyncRouter({ deviceSyncService, mongoose, requireAuth, optionalAuth });
+const mediaRouter = createMediaRouter({ requireAuth, mediaStorage, mediaUploadLimiter });
 
 const mountHttpRoutes = (target) => {
   target.use(healthRouter);
@@ -287,6 +291,7 @@ const mountHttpRoutes = (target) => {
   target.use(devicesRouter);
   target.use(envelopesRouter);
   target.use(syncRouter);
+  target.use(mediaRouter);
 };
 
 mountHttpRoutes(app);
